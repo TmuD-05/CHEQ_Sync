@@ -13,7 +13,7 @@ class Resource(models.Model):
     pub_date = models.DateTimeField("date published")
 
     def __str__(self):
-        return self.process_id, self.sequence_number
+        return f"{self.process_id}, {self.sequence_number}"
 
     def get_all_steps_in_process(self, process_id):
         return self.process_id == process_id

@@ -8,7 +8,7 @@ from rest_framework.parsers import JSONParser
 from .serializers import ResourceSerializer, ResourceToConfirmationMappingSerializer, ResultSerializer
 from datetime import datetime
 from .services import SignatureService
-
+from django.utils import timezone
 # TODO: publish RSA verification key
 host = "http://127.0.0.1:8000"
 valid_decisions = ["ACCEPT", "REJECT"]
@@ -156,6 +156,28 @@ class ProcessExecutionWithConfirmation(APIView):
             "result_uri": result_uri
         }
         return Response(response, status=202)
+
+class CreateProcessView(APIView):
+    def post(self, request):
+        process_id = int(request.data["process_id"])
+
+        for i in range(1, 4):
+            Resource.objects.create(
+                process_id=process_id,
+                sequence_number=i,
+                description=f"This is step number {i} in the business process {process_id}",
+                pub_date=timezone.now()
+            )
+
+        if not ResourceToConfirmationMapping.objects.filter(process_id=process_id).exists():
+            ResourceToConfirmationMapping.objects.create(
+                process_id=process_id,
+                confirmation_uri=f"http://127.0.0.1:8000/confirmation_server/trigger_confirmation"
+                # or whatever your confirmation URI should be
+            )
+        return Response(status=201)
+
+
 
 #TODO:
 # implement API endpoint that provides public key for signature verification

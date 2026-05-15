@@ -62,7 +62,6 @@ class AgentService:
             if response.tool_calls:
                 for tool_call in response.tool_calls:
                     if tool_call in response.tool_calls:
-                        # what if the process is already made
                         res = self.create_process(tool_call["args"]["process_id"])
 
                         if res == "Process created":
@@ -93,6 +92,19 @@ class AgentService:
                     {}
                 )
                 return final_response
+
+    def create_process(self, process_id):
+
+        try:
+            response = httpx.post(
+                'http://127.0.0.1:8000/resource_server/create_process/',
+                json={"process_id": process_id},
+                timeout=10.0
+            )
+            if response.status_code == 201:
+                return "Process created"
+        except Exception as e:
+            return f"Error creating process"
 
     def create_process(self, process_id):
 

@@ -108,7 +108,6 @@ class ResourceCHEQView(APIView):
         else:
             return Response(status=422)
 
-
 class ResultView(APIView):
     def get(self, request, process_id):
         if process_id:

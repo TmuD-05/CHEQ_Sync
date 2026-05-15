@@ -64,7 +64,7 @@ class ResourceView(APIView):
         signed_process_id = verifed_cheq['CHEQ']["operation name"]
         if process_id == signed_process_id:
             try:
-                result = Result.objects.get(process_id=signed_process_id)
+                result = Result.objects.filter(process_id=signed_process_id).first()
                 if result.confirmation_status == "PENDING":
                     result.confirmation_status = decision
                     result.save(update_fields=['confirmation_status'])
@@ -107,7 +107,6 @@ class ResourceCHEQView(APIView):
                 return Response(status=422)
         else:
             return Response(status=422)
-
 
 class ResultView(APIView):
     def get(self, request, process_id):

@@ -13,7 +13,7 @@ class Resource(models.Model):
     pub_date = models.DateTimeField("date published")
 
     def __str__(self):
-        return self.process_id, self.sequence_number
+        return f"Process {self.process_id}, Step {self.sequence_number}"
 
     def get_all_steps_in_process(self, process_id):
         return self.process_id == process_id
@@ -23,7 +23,7 @@ class ResourceToConfirmationMapping(models.Model):
     confirmation_uri = models.URLField() #this is the confirmation URI
 
     def __str__(self):
-        return self.process_id, self.confirmation_uri
+        return f"Process {self.process_id} -> {self.confirmation_uri}"
 
     def get_confirmation_uri(self, process_id):
         return self.process_id == process_id
@@ -37,7 +37,7 @@ class Result(models.Model):
     ) #this is the status of confirmation
 
     def __str__(self):
-        return self.process_id, self.confirmation_status
+        return f"Process {self.process_id}: {self.confirmation_status}"
 
     def get_all_confirmation_status(self, process_id):
         return self.process_id == process_id

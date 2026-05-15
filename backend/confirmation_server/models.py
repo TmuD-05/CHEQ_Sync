@@ -5,7 +5,7 @@ class ResourceUriCheqMapping(models.Model):
     CHEQ = models.JSONField()
 
     def __str__(self):
-        return self.resource_uri, self.CHEQ
+        return f" Mapping {self.resource_uri, self.CHEQ}"
 
     def get_cheq(self, resource_uri):
         return self.resource_uri == resource_uri

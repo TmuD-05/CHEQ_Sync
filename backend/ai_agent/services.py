@@ -22,16 +22,32 @@ class AgentService:
         self.tools = [
             {
                     "name": "execute_process",
-                    "description": "Executes a specific business process by ID. Use this to trigger workflows like flight bookings (ID: 10), hardware requests (ID: 11), or software access (ID: 12). The process will require human-in-the-loop confirmation via the CHEQ protocol.",
+                    "description": "Search for flights and get confirmation options",
                     "input_schema": {
                         "type": "object",
                         "properties": {
-                            "process_id": {
-                                "type": "integer",
-                                "description": "The unique database ID of the process template to trigger."
+                            "origin": {
+                                "type": "string",
+                                "description": "A three letter airport code eg YVR, HRE, LAX "
+                            },
+                            "destination": {
+                                "type": "string",
+                                "description": "A three letter airport code eg YVR, LAX "
+                            },
+                            "outbound_date":{
+                                "type": "string",
+                                "description":" a date that can be dd-mm-yyyy or mm-dd-yyyy",
+                            },
+                            "return_date": {
+                                "type": "string",
+                                "description": " a date that can be dd-mm-yyyy or mm-dd-yyyy",
+                            },
+                            "type":{
+                                "type": "string",
+                                "description": "Is it a round trip or one way"
                             }
                         },
-                        "required": ["process_id"]
+                        "required": ["origin","destination","outbound_date","return_date","type"]
                     }
 
             }
@@ -62,11 +78,8 @@ class AgentService:
             if response.tool_calls:
                 for tool_call in response.tool_calls:
                     if tool_call in response.tool_calls:
-                        res = self.create_process(tool_call["args"]["process_id"])
-
-                        if res == "Process created":
-                            result = self.execute_cheq_flow(tool_call["args"]["process_id"])
-
+                        params = tool_call["args"]
+                        result = self.execute_cheq_flow(params)
                         messages.append(ToolMessage(
                             tool_call_id = tool_call["id"],
                             content = str(result)
@@ -93,43 +106,17 @@ class AgentService:
                 )
                 return final_response
 
-    def create_process(self, process_id):
-
-        try:
-            response = httpx.post(
-                'http://127.0.0.1:8000/resource_server/create_process/',
-                json={"process_id": process_id},
-                timeout=10.0
-            )
-            if response.status_code == 201:
-                return "Process created"
-        except Exception as e:
-            return f"Error creating process"
-
-    def create_process(self, process_id):
-
-        try:
-            response = httpx.post(
-                'http://127.0.0.1:8000/resource_server/create_process/',
-                json={"process_id": process_id},
-                timeout=10.0
-            )
-            if response.status_code == 201:
-                return "Process created"
-        except Exception as e:
-            return f"Error creating process"
-
-    def execute_cheq_flow(self, process_id):
+    def execute_cheq_flow(self, params):
         try:
 
             response = httpx.post(
                 'http://127.0.0.1:8000/resource_server/execute_process_with_confirmation/',
-                json={"process_id": process_id},
+                json={"parameters": params},
                 timeout=10.0
             )
 
             if response.status_code != 202:
-                return f"Error: Failed to trigger process {process_id}"
+                return f"Error: Failed to trigger process {params}"
 
             uri_pack = response.json()
 
@@ -140,10 +127,10 @@ class AgentService:
             )
 
             if confirm_response.status_code != 200:
-                return f"Error: Failed to trigger confirmation for process {process_id}"
+                return f"Error: Failed to trigger confirmation for process {params}"
 
             result_uri = uri_pack['result_uri']
-            result = self.poll_for_result(result_uri, process_id)
+            result = self.poll_for_result(result_uri, params)
 
             return result
 
@@ -183,4 +170,3 @@ class AgentService:
             {},
             {}
         )
-

@@ -9,15 +9,13 @@ export default function Chat()
     { id: 1, message: "Hi! How can I help you?", type: "Bot" },
   ]);
   const [message, setMessage] = useState("");
-  
-  // We need a session_id for your backend's logic
+
   const [sessionId] = useState(`session_${Math.random().toString(36).substr(2, 9)}`);
 
   const sendMessage = async (e) => {
     e.preventDefault();
     if (message.trim() === "") return;
 
-    // 1. Add user message to UI
     const newUserMessage = { id: Date.now(), message: message, type: "User" };
     setMessages((prev) => [...prev, newUserMessage]);
     
@@ -25,7 +23,7 @@ export default function Chat()
     setMessage("");
 
     try {
-      // 2. Make the request to your Django Backend
+     
       const response = await fetch("http://127.0.0.1:8000/ai_agent/chat/", {
         method: "POST",
         headers: {
@@ -40,10 +38,10 @@ export default function Chat()
       const data = await response.json();
 
       if (response.ok) {
-        // 3. Add the Agent's response to UI
+      
         const newBotMessage = {
           id: Date.now() + 1,
-          message: data.agent_response, // Matches your backend's Response key
+          message: data.agent_response, 
           type: "Bot",
         };
         setMessages((prev) => [...prev, newBotMessage]);
@@ -56,14 +54,14 @@ export default function Chat()
   };
 
   const clearMessages = async () => {
-    // Optional: Call your ClearMemoryView backend endpoint
+  
     await fetch("http://127.0.0.1:8000/ai_agent/clear_memory/", {
     method: "POST",
     headers: { 
       "Content-Type": "application/json",
-      "X-CSRFToken": getCsrfToken(),  // ADD THIS
+      "X-CSRFToken": getCsrfToken(),  
     },
-      credentials: "include",  // ADD THIS
+      credentials: "include",  
       body: JSON.stringify({ session_id: sessionId })
     });
   }

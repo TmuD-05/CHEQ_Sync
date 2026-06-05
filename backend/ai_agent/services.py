@@ -16,6 +16,10 @@ class AgentService:
         self.db_conn = sqlite3.connect("cheq_memory.db", check_same_thread=False)
 
         self.memory = SqliteSaver(self.db_conn)
+        self.db_conn.execute(
+            "CREATE TABLE IF NOT EXISTS uri_pack (session_id TEXT PRIMARY KEY, data TEXT)"
+        )
+        self.db_conn.commit()
         self.uri_pack = {}
         self.memory.setup()
         self.SYSTEM_PROMPT = """You are a flight booking assistant. When showing flight options:
@@ -24,8 +28,7 @@ class AgentService:
                 3. Skip detailed amenities unless user asks
                 4. Format as a simple numbered list first, then 1-2 line summary
                 5. Don't use markdown (no ##, **bold**, etc) unless user asks
-                6. Provide the user with a link http://127.0.0.1:8000/confirmation_server/ where the user can confirm the flight bookings and get additional infromation about the flights
-
+               
                 Example format:
                 Top 3 cheapest flights YVR to NRT:
                 1. WestJet via YYC - $1,583 | 13h 40m (1 stop)
@@ -33,7 +36,7 @@ class AgentService:
                 3. Air Canada Direct - $1,788 | 9h 45m
 
                 Best value: WestJet saves money but adds connection time.
-                Click this link http://127.0.0.1:8000/confirmation_server/  to confirm the flight  and add your information"""
+   """
         self.tools = [
             {
                     "name": "search_flights",
@@ -65,6 +68,15 @@ class AgentService:
                         "required": ["origin","destination","outbound_date","return_date","type"]
                     }
 
+            },
+            {
+                "name": "poll_booking_result",
+                "description": "Call this immediately after the user says they  make a selection , send a message to the user with the link  http://127.0.0.1:8000/confirmation_server/  to confirm the flight  and add your information. Polls until the user accepts or rejects the booking on the confirmation page.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
             }
         ]
     def chat(self, user_message, session_id="default"):
@@ -93,9 +105,22 @@ class AgentService:
 
             if response.tool_calls:
                 for tool_call in response.tool_calls:
-                    if tool_call in response.tool_calls:
+
+                        tool_name = tool_call["name"]
                         params = tool_call["args"]
-                        result = self.execute_cheq_flow(params,session_id)
+
+                        if tool_name == "search_flights":
+                            result = self.execute_cheq_flow(params,session_id)
+
+                        elif tool_name == "poll_booking_result":
+
+                            result = self.poll_for_result(
+                                session_id,
+                                max_attempts=60,
+                                interval=5
+                            )
+                        else:
+                            result = f"Unknown tool: {tool_name}"
                         messages.append(ToolMessage(
                             tool_call_id = tool_call["id"],
                             content = str(result)
@@ -135,7 +160,11 @@ class AgentService:
                 return f"Error: Failed to trigger process {params}"
 
             flights_uri = response.json()
-            self.uri_pack = flights_uri
+            self.uri_pack = {
+                "confirmation_uri" : flights_uri["confirmation_uri"],
+                "resource_uri" : flights_uri["resource_uri"],
+                "result_uri" : flights_uri["result_uri"],
+            }
             # confirm_response = httpx.post(
             #     uri_pack['confirmation_uri'],
             #     json={"resource_uri": uri_pack['resource_uri']},
@@ -147,16 +176,28 @@ class AgentService:
             #
             # result_uri = uri_pack['result_uri']
             # result = self.poll_for_result(result_uri, params)
-
+            self._save_uri_pack(session_id)
             return flights_uri["flights"]
 
         except Exception as e:
             return f"Error executing CHEQ flow: {str(e)}"
 
-    def poll_for_result(self, result_uri, process_id,max_attempts=60, interval=5):
+    def poll_for_result(self,session_id="default",max_attempts=60, interval=5 ):
+        self._load_uri_pack(session_id)
+        if not self.uri_pack:
+            return "Error: No booking context found. Please search for flights first."
+
+        confirm_response = httpx.post(
+            self.uri_pack["confirmation_uri"],
+            json = {"resource_uri": self.uri_pack["resource_uri"]},
+            timeout=10.0
+        )
+
+        if confirm_response.status_code != 200:
+            return f"Error: Failed to trigger confirmation for process"
         for attempt in range(max_attempts):
             try:
-                response = httpx.get(result_uri, timeout=5.0)
+                response = httpx.get(self.uri_pack["result_uri"], timeout=5.0)
                 result = response.json()
 
                 if result and len(result) > 0:
@@ -164,17 +205,18 @@ class AgentService:
 
                     if status != 'PENDING':
                         if status == 'ACCEPT':
-                            return f" Process {process_id} was approved and executed successfully!"
+                            return f" Flight was approved and executed successfully!"
                         else:
-                            return f" Process {process_id} was rejected."
+                            return f" Flight was rejected."
 
                 time.sleep(interval)
 
             except Exception as e:
+                print(f"--- Network Attempt Failed: {e} ---")
                 time.sleep(interval)
                 continue
 
-        return f"Timeout: No confirmation received for process {process_id} within {max_attempts * interval} seconds."
+        return f"Timeout: No confirmation received  {max_attempts * interval} seconds."
 
     def clear_memory(self, session_id="default"):
         thread_id = f"session_{session_id}"
@@ -187,3 +229,19 @@ class AgentService:
             {}
         )
 
+    def _save_uri_pack(self, session_id):
+        self.db_conn.execute(
+            "INSERT OR REPLACE INTO uri_pack (session_id, data) VALUES (?, ?)",
+            (session_id, json.dumps(self.uri_pack))
+        )
+        self.db_conn.commit()
+
+    def _load_uri_pack(self, session_id):
+        self.db_conn.execute(
+            "CREATE TABLE IF NOT EXISTS uri_pack (session_id TEXT PRIMARY KEY, data TEXT)"
+        )
+        row = self.db_conn.execute(
+            "SELECT data FROM uri_pack WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if row:
+            self.uri_pack = json.loads(row[0])

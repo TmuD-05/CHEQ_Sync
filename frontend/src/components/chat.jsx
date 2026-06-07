@@ -53,18 +53,18 @@ export default function Chat()
     }
   };
 
-  const clearMessages = async () => {
+  // const clearMessages = async () => {
   
-    await fetch("http://127.0.0.1:8000/ai_agent/clear_memory/", {
-    method: "POST",
-    headers: { 
-      "Content-Type": "application/json",
-      "X-CSRFToken": getCsrfToken(),  
-    },
-      credentials: "include",  
-      body: JSON.stringify({ session_id: sessionId })
-    });
-  }
+  //   await fetch("http://127.0.0.1:8000/ai_agent/clear_memory/", {
+  //   method: "POST",
+  //   headers: { 
+  //     "Content-Type": "application/json",
+  //     "X-CSRFToken": getCsrfToken(),  
+  //   },
+  //     credentials: "include",  
+  //     body: JSON.stringify({ session_id: sessionId })
+  //   });
+  // }
 
   return (
     <div>
@@ -79,7 +79,7 @@ export default function Chat()
       <form onSubmit={sendMessage}>
         <input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Ask about processes..." />
         <button type="submit">Send</button>
-        <button type="button" onClick={clearMessages}>Clear</button>
+        {/* <button type="button" onClick={clearMessages}>Clear</button> */}
       </form>
     </div>
   );

@@ -17,9 +17,10 @@ class AirlineService:
             "departure_id": params['origin'],  # ← Map origin to departure_id
             "arrival_id": params['destination'],  # ← Map destination to arrival_id
             "outbound_date": params['outbound_date'],
-            "return_date": params['return_date'],
             "type": params['type']
         }
+        if 'return_date' in params:
+            parameters['return_date'] = params['return_date']
 
         response =  requests.get("https://serpapi.com/search", params=parameters)
         return response.json()

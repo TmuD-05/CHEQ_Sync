@@ -9,7 +9,7 @@ class ConfirmationStatus(models.TextChoices):
 class Resource(models.Model):
     process_id = models.IntegerField() #this is meant to denote a set of steps within a business process
     pub_date = models.DateTimeField("date published")
-    flight_data = models.JSONField()
+    # flight_data = models.JSONField()
 
     def __str__(self):
         return f"{self.process_id}, {self.sequence_number}"

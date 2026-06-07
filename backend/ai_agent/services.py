@@ -157,7 +157,7 @@ class AgentService:
             )
 
             if response.status_code != 202:
-                return f"Error: Failed to trigger process {params}"
+                return f"Error: Failed to trigger process"
 
             flights_uri = response.json()
             self.uri_pack = {
@@ -165,17 +165,7 @@ class AgentService:
                 "resource_uri" : flights_uri["resource_uri"],
                 "result_uri" : flights_uri["result_uri"],
             }
-            # confirm_response = httpx.post(
-            #     uri_pack['confirmation_uri'],
-            #     json={"resource_uri": uri_pack['resource_uri']},
-            #     timeout=10.0
-            # )
-            #
-            # if confirm_response.status_code != 200:
-            #     return f"Error: Failed to trigger confirmation for process {params}"
-            #
-            # result_uri = uri_pack['result_uri']
-            # result = self.poll_for_result(result_uri, params)
+
             self._save_uri_pack(session_id)
             return flights_uri["flights"]
 

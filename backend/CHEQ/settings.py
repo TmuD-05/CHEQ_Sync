@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     'confirmation_server.apps.ConfirmationServerConfig',
     'resource_server.apps.ResourceServerConfig',
     'ai_agent',
+    'airline_api',
     'corsheaders',
 ]
 

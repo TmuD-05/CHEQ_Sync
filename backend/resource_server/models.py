@@ -51,3 +51,25 @@ class Process(models.Model):
 
     def __str__(self):
         return f"Process {self.id}"
+
+class Flight(models.Model):
+    origin = models.CharField(max_length=3)
+    destination = models.CharField(max_length=3)
+    outbound_date = models.DateField()
+    return_date = models.DateField(null=True, blank=True)
+
+    airline = models.CharField(max_length=50)
+    flight_number = models.CharField(max_length=10)
+    departure_time = models.TimeField()
+    arrival_time = models.TimeField()
+    duration_minutes = models.IntegerField()
+    stops = models.IntegerField(default=0)
+
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    airplane = models.CharField(max_length=50)
+
+    class Meta:
+        ordering = ['price']
+
+    def __str__(self):
+        return f"{self.airline} {self.flight_number}"

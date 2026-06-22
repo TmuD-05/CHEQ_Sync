@@ -111,7 +111,7 @@ class AgentService:
 
         messages.append(HumanMessage(content=user_message))
         llm = ChatAnthropic(
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-4-6",
                 anthropic_api_key = self.api_key,
                 model_kwargs={"system": self.SYSTEM_PROMPT}
             ).bind_tools(self.tools)

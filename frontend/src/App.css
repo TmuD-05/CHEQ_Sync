@@ -19,8 +19,9 @@ body {
 .chat-shell {
   display: flex;
   flex-direction: column;
-  height: 100dvh;
-  max-width: 720px;
+  flex: 1;               /* ← replace height: 100dvh with this */
+  max-width: 900px;
+  width: 100%;           /* ← add this */
   margin: 0 auto;
   background: #ffffff;
   border-left: 0.5px solid #e5e5e2;

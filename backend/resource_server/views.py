@@ -1,5 +1,6 @@
 import uuid
 import re
+import os
 import requests
 # pyrefly: ignore [missing-import]
 from django.http.request import QueryDict
@@ -12,9 +13,11 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import JSONParser
 from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.permissions import IsAuthenticated
 from .serializers import ResourceSerializer, ResourceToConfirmationMappingSerializer, ResultSerializer
 from datetime import datetime
 from .services import SignatureService
+from .auth import ConfirmationServerAuthentication
 from django.utils import timezone
 
 host = "http://127.0.0.1:8000"
@@ -181,12 +184,10 @@ class SelectFlightView(APIView):
 
 
 class ResourceCHEQView(APIView):
-    def get(self, request, process_token):
-        try:
-            check_auth0_token(request)
-        except AuthenticationFailed as e:
-            return Response({"detail": str(e)}, status=401)
+    authentication_classes = [ConfirmationServerAuthentication]
+    permission_classes = [IsAuthenticated]
 
+    def get(self, request, process_token):
         try:
             process_id = get_process_id_from_token(process_token)
         except ValidationError as e:
@@ -196,7 +197,7 @@ class ResourceCHEQView(APIView):
             resources = Resource.objects.filter(process_id=process_id)
             if (resources.values()):
                 serializer = ResourceSerializer(resources, many=True)
-                # Keep resource execution uri signature using token
+
                 resource_execution_uri = host + reverse("resource_server:resource", kwargs={"process_token": process_token}) + "execute"
 
                 CHEQ = {
@@ -217,6 +218,18 @@ class ResourceCHEQView(APIView):
                 return Response(status=404)
         else:
             return Response(status=422)
+
+
+class PublicKeyView(APIView):
+    def get(self, request):
+        try:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            rs_public_key_path = os.path.join(base_dir, 'rs_public_key.pem')
+            with open(rs_public_key_path, 'r') as f:
+                pub_key = f.read()
+            return Response({"public_key": pub_key}, status=200)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
 
 
 class ResultView(APIView):

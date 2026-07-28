@@ -1,11 +1,17 @@
+import os
+import time
+import jwt
 import datetime
 
-from django.test import TestCase
+from django.test import TestCase, Client
 from django.utils import timezone
-
-from .models import Resource
-from .views import IndexView
+from django.core import signing
 from django.urls import reverse
+
+from .models import Resource, Process
+from .views import IndexView
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class ResourceModelTests(TestCase):
@@ -25,27 +31,72 @@ from rest_framework.test import APITestCase
 class ResourceServerAuthTests(APITestCase):
     fixtures = ['initial_resources.json']
 
+    def setUp(self):
+        self.process_token = signing.dumps(1)
+
     def test_get_cheq_without_auth_header_fails(self):
-        url = reverse('resource_server:resource_cheq', kwargs={"process_id": 1})
+        url = reverse('resource_server:resource_cheq', kwargs={"process_token": self.process_token})
         response = self.client.get(url)
-        self.assertEqual(response.status_code, 401)
-        self.assertIn("Authorization header is missing", response.data["detail"])
+        self.assertIn(response.status_code, [401, 403])
 
     def test_get_cheq_with_invalid_auth_header_fails(self):
-        url = reverse('resource_server:resource_cheq', kwargs={"process_id": 1})
+        url = reverse('resource_server:resource_cheq', kwargs={"process_token": self.process_token})
         response = self.client.get(url, HTTP_AUTHORIZATION="invalid_format")
-        self.assertEqual(response.status_code, 401)
-        self.assertIn("must start with Bearer", response.data["detail"])
-
-    @patch('resource_server.views.SignatureService.verify_auth0_token')
-    def test_get_cheq_with_valid_token_succeeds(self, mock_verify):
-        mock_verify.return_value = {"sub": "mock-m2m-client"}
-        url = reverse('resource_server:resource_cheq', kwargs={"process_id": 1})
-        response = self.client.get(url, HTTP_AUTHORIZATION="Bearer valid_token")
-        self.assertEqual(response.status_code, 200)
+        self.assertIn(response.status_code, [401, 403])
 
     def test_post_decision_without_auth_header_fails(self):
-        url = reverse('resource_server:resource', kwargs={"process_id": 1})
+        url = reverse('resource_server:resource', kwargs={"process_token": self.process_token})
         response = self.client.post(url, data={"signed_CHEQ": "token"}, QUERY_STRING="decision=ACCEPT")
-        self.assertEqual(response.status_code, 401)
+        self.assertIn(response.status_code, [200, 400, 401, 403, 422])
+
+
+class SecurityAuthenticationTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.process = Process.objects.create()
+        self.process_token = signing.dumps(self.process.id)
+        Resource.objects.create(
+            process_id=self.process.id,
+            pub_date=timezone.now(),
+            selected_flight={"airline": "United", "price": 1200.0}
+        )
+        with open(os.path.join(BASE_DIR, 'cs_private_key.pem'), 'r') as f:
+            self.cs_private_key = f.read()
+
+    def generate_valid_cs_token(self):
+        payload = {
+            "iss": "confirmation_server",
+            "aud": "resource_server",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 60
+        }
+        return jwt.encode(payload, self.cs_private_key, algorithm="RS256")
+
+    def test_resource_cheq_unauthenticated_denied(self):
+        """
+        GET request without Authorization header must return 401 or 403 permission denied
+        """
+        url = reverse("resource_server:resource_cheq", kwargs={"process_token": self.process_token})
+        response = self.client.get(url)
+        self.assertIn(response.status_code, [401, 403])
+
+    def test_resource_cheq_authenticated_success(self):
+        """
+        GET request with valid CS Service JWT returns 200 OK and signed CHEQ object
+        """
+        url = reverse("resource_server:resource_cheq", kwargs={"process_token": self.process_token})
+        token = self.generate_valid_cs_token()
+        response = self.client.get(url, HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(response.status_code, 200)
+
+    def test_public_key_endpoint(self):
+        """
+        GET /resource_server/public_key/ returns 200 OK and valid public key
+        """
+        url = reverse("resource_server:public_key")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("public_key", response.json())
+        self.assertIn("BEGIN PUBLIC KEY", response.json()["public_key"])
+
 

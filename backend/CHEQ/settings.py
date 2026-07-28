@@ -86,22 +86,33 @@ REST_FRAMEWORK = {
     ],
 }
 
+import sys
+from pathlib import Path
+
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": "CHEQ",
-        "USER": "root",
-        "PASSWORD": "P4$$w0rd",
-        "HOST": "127.0.0.1",
-        "PORT": "3306",
-        "OPTIONS": {
-            "read_default_file": "/path/to/my.cnf",
-        },
+if 'test' in sys.argv or os.getenv('USE_SQLITE', 'true').lower() == 'true':
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "cheq_memory.db",
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": "CHEQ",
+            "USER": "root",
+            "PASSWORD": "P4$$w0rd",
+            "HOST": "127.0.0.1",
+            "PORT": "3306",
+            "OPTIONS": {
+                "read_default_file": "/path/to/my.cnf",
+            },
+        }
+    }
 
 
 # Password validation

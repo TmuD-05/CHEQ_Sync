@@ -48,19 +48,29 @@ def get_access_token():
     return access_token
 
 class ConfirmationService:
+    def generate_service_jwt(self):
+        with open(os.path.join(BASE_DIR, 'cs_private_key.pem'), 'r') as f:
+            signing_key = f.read()
+        payload = {
+            "iss": "confirmation_server",
+            "aud": "resource_server",
+            "iat": int(time.time()),
+            "exp": int(time.time()) + 60
+        }
+        return jwt.encode(payload, signing_key, algorithm="RS256")
+
     def retrieveCHEQ(self, resource_uri):
         try:
-            # Added trailing slash to match Django's APPEND_SLASH setting
             cheq_endpoint = resource_uri + "cheq/"
-            headers = {
-                "Authorization": f"Bearer {get_access_token()}"
-            }
+            service_token = self.generate_service_jwt()
+            headers = {"Authorization": f"Bearer {service_token}"}
             response = requests.get(cheq_endpoint, headers=headers)
             if response.status_code == 404:
                 raise IndexError
-            response.raise_for_status()
+            if response.status_code != 200:
+                raise Exception(f"Resource Server returned status {response.status_code}: {response.text}")
             CHEQ = response.text.strip('"')
-            # Changed from dotenv: reading rs_public_key.pem directly because dotenv cannot parse multiline PEM keys
+
             with open(os.path.join(BASE_DIR, 'rs_public_key.pem'), 'r') as f:
                 verification_key = f.read()
             verified_CHEQ = jwt.decode(CHEQ, verification_key, algorithms=["RS256"], verify_signature=True, require=["CHEQ"])
@@ -70,7 +80,6 @@ class ConfirmationService:
 
     def sign(self, CHEQ):
         try:
-            # Changed from dotenv: reading cs_private_key.pem directly because dotenv cannot parse multiline PEM keys
             with open(os.path.join(BASE_DIR, 'cs_private_key.pem'), 'r') as f:
                 signing_key = f.read()
             encoded_jwt = jwt.encode({"CHEQ": CHEQ}, signing_key, algorithm="RS256")
@@ -80,11 +89,10 @@ class ConfirmationService:
 
     def sendDecisionToRS(self, CHEQ, decision, resource_uri, extra_data=None):
         signed_cheq = ConfirmationService.sign(self, CHEQ)
-        headers = {
-            "Authorization": f"Bearer {get_access_token()}"
-        }
+        payload = {"signed_CHEQ": signed_cheq}
+        if extra_data:
+            payload.update(extra_data)
         response = requests.post(resource_uri,
-                                 data={"signed_CHEQ": signed_cheq},
-                                 params={"decision": decision},
-                                 headers=headers)
+                                 data=payload,
+                                 params={"decision": decision})
         return response

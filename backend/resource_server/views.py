@@ -1,6 +1,7 @@
 import uuid
 import re
 import os
+import time
 import requests
 # pyrefly: ignore [missing-import]
 from django.http.request import QueryDict
@@ -8,7 +9,7 @@ from django.views import generic
 from django.urls import reverse
 from django.core import signing
 from django.core.exceptions import ValidationError
-from .models import Resource, ResourceToConfirmationMapping, Result, Process, Flight
+from .models import Resource, ResourceToConfirmationMapping, Result, Process, Flight, ConsumedNonce
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import JSONParser
@@ -104,14 +105,27 @@ class ResourceView(APIView):
         try:
             verifed_cheq = SignatureService.verify(self, CHEQ)
         except Exception as e:
-            return Response(status=400)
-        signed_process_id = verifed_cheq['CHEQ']["operation name"]
+            return Response("Signature verification failed", status=400)
+
+        cheq_payload = verifed_cheq.get("CHEQ", {})
+        signed_process_id = cheq_payload.get("operation name")
+        nonce = cheq_payload.get("nonce")
+        exp = cheq_payload.get("exp")
+
+        if exp and int(time.time()) > int(exp):
+            return Response("Expired CHEQ object", status=400)
+
+        if nonce and ConsumedNonce.objects.filter(nonce=nonce).exists():
+            return Response("Replay attack: Nonce already consumed", status=400)
+
         if process_id == signed_process_id:
             try:
                 result = Result.objects.filter(process_id=signed_process_id).first()
                 if result.confirmation_status == "PENDING":
                     result.confirmation_status = decision
                     result.save(update_fields=['confirmation_status'])
+                    if nonce:
+                        ConsumedNonce.objects.create(nonce=nonce, process_id=signed_process_id)
                     return Response(status=200)
                 else:
                     return Response("Decision for this process already submitted", status=400)
@@ -200,8 +214,13 @@ class ResourceCHEQView(APIView):
 
                 resource_execution_uri = host + reverse("resource_server:resource", kwargs={"process_token": process_token}) + "execute"
 
+                nonce = str(uuid.uuid4())
+                exp = int(time.time()) + 900
+
                 CHEQ = {
                     "version": 1.0,
+                    "nonce": nonce,
+                    "exp": exp,
                     "operation": resource_execution_uri,
                     "operation name": process_id,
                     "inputs" :{

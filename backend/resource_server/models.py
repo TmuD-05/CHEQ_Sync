@@ -76,3 +76,12 @@ class Flight(models.Model):
 
     def __str__(self):
         return f"{self.airline} {self.flight_number}"
+
+
+class ConsumedNonce(models.Model):
+    nonce = models.CharField(max_length=64, primary_key=True)
+    process_id = models.IntegerField()
+    consumed_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Nonce {self.nonce} for Process {self.process_id}"

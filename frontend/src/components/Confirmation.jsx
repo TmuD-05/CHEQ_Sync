@@ -293,8 +293,15 @@ export default function Confirmation({ resourceUri, accessToken, onBack }) {
                   >
                     {showStopoverPopup && (
                       <div className="stopover-popup">
-                        <strong>1 Stopover (Layover)</strong>
-                        <p>Connection Point Airport</p>
+                        <div style={{ fontWeight: 600, color: '#f3f4f6', marginBottom: '2px' }}>
+                          1 Layover Connection
+                        </div>
+                        <div style={{ color: '#d1d5db', fontSize: '10px' }}>
+                          <strong>Transfer:</strong> {flight?.origin === 'YVR' && flight?.destination === 'NRT' ? 'Tokyo Narita (NRT)' : 'Hub Airport'}
+                        </div>
+                        <div style={{ color: '#9ca3af', fontSize: '9.5px', marginTop: '2px' }}>
+                          ⏱️ Layover duration: 2h 15m
+                        </div>
                       </div>
                     )}
                   </div>

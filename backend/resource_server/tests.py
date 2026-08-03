@@ -99,4 +99,23 @@ class SecurityAuthenticationTests(TestCase):
         self.assertIn("public_key", response.json())
         self.assertIn("BEGIN PUBLIC KEY", response.json()["public_key"])
 
+    def test_cheq_contains_nonce_and_exp(self):
+        """
+        GET /resource_server/resource/<token>/cheq/ returns signed CHEQ containing nonce and exp
+        """
+        url = reverse("resource_server:resource_cheq", kwargs={"process_token": self.process_token})
+        token = self.generate_valid_cs_token()
+        response = self.client.get(url, HTTP_AUTHORIZATION=f"Bearer {token}")
+        self.assertEqual(response.status_code, 200)
+        signed_cheq_str = response.json()
+        
+        with open(os.path.join(BASE_DIR, 'rs_public_key.pem'), 'r') as f:
+            rs_pub_key = f.read()
+        decoded = jwt.decode(signed_cheq_str, rs_pub_key, algorithms=["RS256"])
+        cheq = decoded["CHEQ"]
+        self.assertIn("nonce", cheq)
+        self.assertIn("exp", cheq)
+        self.assertTrue(len(cheq["nonce"]) > 10)
+        self.assertTrue(cheq["exp"] > time.time())
+
 

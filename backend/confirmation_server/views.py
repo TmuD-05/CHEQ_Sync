@@ -13,7 +13,7 @@ from .serializers import ResourceUriCheqMappingSerializer
 from .services import ConfirmationService
 from enum import Enum
 from .models import ResourceUriCheqMapping
-
+import traceback
 valid_decisions = ["ACCEPT", "REJECT"]
 host = "http://127.0.0.1:8000"
 
@@ -34,7 +34,7 @@ class TriggerView(APIView):
 
     def post(self, request):
         data = request.data
-        #first need to validate and extract the resource URI
+
         if type(data) is not dict:
             return Response(status=415)
         if len(data.keys()) != 1:
@@ -50,23 +50,23 @@ class TriggerView(APIView):
             return Response(status=422)
 
         try:
-            response = ConfirmationService.retrieveCHEQ(self, resource_uri)
-            #write to the DB resource_uri <> CHEQ mapping
-            if not ResourceUriCheqMapping.objects.filter(resource_uri=resource_uri).exists():
-                mapping = ResourceUriCheqMapping(
-                    resource_uri= resource_uri,
-                    CHEQ= response
-                )
-                mapping.save()
-
+            response = ConfirmationService.retrieveCHEQ(resource_uri)
+            ResourceUriCheqMapping.objects.filter(resource_uri=resource_uri).delete()
+            mapping = ResourceUriCheqMapping(
+                resource_uri= resource_uri,
+                CHEQ= response
+            )
+            mapping.save()
             perform_confirmation_uri = host + reverse("confirmation_server:perform")
             response["perform_confirmation_uri"] = perform_confirmation_uri
             return Response(response, status=200)
         except IndexError: #this gets raised by the confirmation if the resource server responds with 404 when looking for a CHEQ
             return Response(status=404)
         except Exception as e:
-            return Response(status=500)
+            print(f"Error in TriggerView: {e}")
 
+            traceback.print_exc()
+            return Response({"error": str(e)}, status=500)
 class PerformView(APIView):
     authentication_classes = [Auth0JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -97,14 +97,18 @@ class PerformView(APIView):
         # Extract extra fields (secure direct inputs)
         extra_data = {k: v for k, v in data.items() if k not in ["resource_uri", "decision"]}
 
+        auth_token = request.headers.get("Authorization")
+
         #get cheq object from DB, and send to RS along with decision
         try:
-            CHEQ_query = ResourceUriCheqMapping.objects.filter(resource_uri=resource_uri)
+            CHEQ_query = ResourceUriCheqMapping.objects.filter(resource_uri=resource_uri).order_by('-id')
             CHEQ_serializer = ResourceUriCheqMappingSerializer(CHEQ_query, many=True)
 
-            if CHEQ_serializer:
+            if CHEQ_serializer.data:
                 CHEQ = CHEQ_serializer.data[0]['CHEQ']['CHEQ']
-                response = ConfirmationService.sendDecisionToRS(self, CHEQ, decision, resource_uri, extra_data=extra_data)
+                response = ConfirmationService.sendDecisionToRS(
+                    CHEQ, decision, resource_uri, extra_data=extra_data, auth_token=auth_token
+                )
                 if response.status_code == 200:
                     return Response("Decision sent", status=200)
                 else:

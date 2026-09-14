@@ -150,9 +150,13 @@ function App() {
         resourceUri={resourceUri} 
         accessToken={accessToken}
         onBack={(decision) => {
-          setPendingFeedback(decision || null)
-          window.history.pushState({}, document.title, '/')
-          window.dispatchEvent(new PopStateEvent('popstate'))
+          if (decision === "ACCEPT" || decision === "REJECT") {
+            setPendingFeedback(decision);
+          } else {
+            setPendingFeedback(null);
+          }
+          window.history.pushState({}, document.title, '/');
+          window.dispatchEvent(new PopStateEvent('popstate'));
         }} 
       />
     )

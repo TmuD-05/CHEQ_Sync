@@ -33,11 +33,15 @@ export default function Chat({ messages, setMessages, sessionId, pendingFeedback
 
   useEffect(() => {
     if (pendingFeedback && !feedbackProcessedRef.current) {
+      if (pendingFeedback !== "ACCEPT" && pendingFeedback !== "REJECT") {
+        onFeedbackProcessed();
+        return;
+      }
       feedbackProcessedRef.current = true;
       const feedbackMessage = pendingFeedback === "ACCEPT"
         ? "I have accepted and authorized the booking."
         : "I have rejected the booking.";
-      postChatMessage(feedbackMessage, { silent: true });
+      postChatMessage(feedbackMessage, { silent: false });
       onFeedbackProcessed();
     }
     if (!pendingFeedback) {
@@ -164,13 +168,19 @@ export default function Chat({ messages, setMessages, sessionId, pendingFeedback
                     remarkPlugins={[remarkGfm]}
                     components={{
                       a: ({node, ...props}) => {
-                        if (props.href && props.href.startsWith('/?resource_uri=')) {
+                        const href = props.href || "";
+                        if (href.includes("resource_uri=")) {
                           return (
                             <a 
                               {...props}
                               onClick={(e) => {
                                 e.preventDefault();
-                                window.history.pushState({}, '', props.href);
+                                try {
+                                  const url = new URL(href, window.location.origin);
+                                  window.history.pushState({}, '', url.pathname + url.search);
+                                } catch (err) {
+                                  window.history.pushState({}, '', href);
+                                }
                                 window.dispatchEvent(new PopStateEvent('popstate'));
                               }}
                             />

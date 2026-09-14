@@ -10,10 +10,13 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langchain_core.messages import HumanMessage,  ToolMessage
 from langchain_anthropic import ChatAnthropic
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 class AgentService:
     def __init__(self):
         self.api_key=os.getenv("ANTHROPIC_API_KEY")
-        self.db_conn = sqlite3.connect("cheq_memory.db", check_same_thread=False)
+        db_path = os.path.join(BASE_DIR, "cheq_memory.db")
+        self.db_conn = sqlite3.connect(db_path, check_same_thread=False)
 
         self.memory = SqliteSaver(self.db_conn)
         self.db_conn.execute(
@@ -36,10 +39,13 @@ class AgentService:
                 3. Air Canada Direct - $1,788 | 9h 45m
                 
                 Best value: WestJet saves money but adds connection time.
-                When poll_booking_result returns an ACCEPT result, respond with a clear confirmation message like:
-                'Your Air Canada AC3 flight has been confirmed and booked successfully. Have a great trip!'
-                Never give a generic response when a booking result is available
-                
+
+                Booking & Verification Rules:
+                - When the user selects a flight (e.g. '1', '2', or airline name), immediately call `send_confirmation_link`.
+                - When the user reports back after visiting the confirmation page (or says 'I have accepted and authorized the booking.' or 'I have rejected the booking.'), you MUST ALWAYS immediately call the `poll_booking_result` tool to check the cryptographic confirmation outcome.
+                - When poll_booking_result returns an ACCEPT result (e.g. 'Flight was approved and executed successfully!'), announce a joyful and clear confirmation message detailing their specific booked flight (airline, flight number, price, departure/arrival times) and wish them a great trip!
+                - When poll_booking_result returns a REJECT result (e.g. 'Flight was rejected.'), acknowledge that the booking was cancelled/declined, and offer to help them book one of the other options from their search or adjust search criteria.
+                - Never ask the user to choose a flight again if they have already made a choice or are reporting back from the confirmation page.
    """
         self.tools = [
             {
@@ -75,7 +81,7 @@ class AgentService:
             },
             {
                 "name": "send_confirmation_link",
-                "description": "Call this immediately after the user makes a selection. Sends the user the confirmation link and waits for them to navigate there.",
+                "description": "Call this immediately after the user makes a flight selection. Sends the user the confirmation link and waits for them to navigate there.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -89,9 +95,7 @@ class AgentService:
             },
             {
                 "name": "poll_booking_result",
-                "description": "Call this ONLY after send_confirmation_link has been called and the user indicates they have completed the confirmation page.Proved"
-                               "a comprehensive summaries of the flight information #",
-
+                "description": "Call this immediately whenever the user indicates they have completed, authorized, accepted, or rejected the booking on the confirmation page. Returns the cryptographic confirmation result.",
                 "input_schema": {
                     "type": "object",
                     "properties": {},
@@ -136,15 +140,33 @@ class AgentService:
                             self._load_uri_pack(session_id)
                             if self.uri_pack and "resource_uri" in self.uri_pack:
                                 try:
-                                    httpx.post(
-                                        self.uri_pack["resource_uri"] + "select_flight/",
+                                    resp = httpx.post(
+                                        f"{self.uri_pack['resource_uri'].rstrip('/')}/select_flight/",
                                         json={"selected_flight": selected_flight},
                                         timeout=10.0
                                     )
-                                    react_url = f"/?resource_uri={self.uri_pack['resource_uri']}"
-                                    result = f"[Please click here to confirm your booking]({react_url})"
+                                    if resp.status_code == 409:
+                                        result = (
+                                            "A flight booking for this session has already been authorized and finalized. "
+                                            "To book another flight, please start a new flight search."
+                                        )
+                                    elif resp.status_code == 200:
+                                        try:
+                                            resp_data = resp.json()
+                                            if isinstance(resp_data, dict) and "resource_uri" in resp_data:
+                                                self.uri_pack["resource_uri"] = resp_data["resource_uri"]
+                                                if "result_uri" in resp_data:
+                                                    self.uri_pack["result_uri"] = resp_data["result_uri"]
+                                                self._save_uri_pack(session_id)
+                                        except Exception:
+                                            pass
+                                        react_url = f"/?resource_uri={self.uri_pack['resource_uri']}"
+                                        result = f"[Please click here to confirm your booking]({react_url})"
+                                    else:
+                                        result = f"Error saving flight selection: {resp.text}"
                                 except Exception as e:
                                     print(f"Error saving flight selection to resource server: {e}")
+                                    react_url = f"/?resource_uri={self.uri_pack['resource_uri']}"
                                     result = f"[Please click here to return]({react_url})"
                             else:
                                 result = f"Could not find confirmation URL. Please try again."
@@ -165,15 +187,23 @@ class AgentService:
 
             else:
                 final_response = response.content
+                now_utc = datetime.now(timezone.utc)
+                checkpoint_id = f"{now_utc.strftime('%Y%m%d%H%M%S%f')}_{uuid.uuid4().hex}"
                 checkpoint_data = {
                     "v": 1,
-                    "id": str(uuid.uuid4()),
-                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "id": checkpoint_id,
+                    "ts": now_utc.isoformat(),
                     "channel_values": {"messages": messages},
                     "channel_versions": {},
                     "versions_seen": {},
                     "pending_sends": [],
                 }
+
+                # Clean up any older checkpoints for this thread so there is no accidental branching or rewinding
+                cursor = self.db_conn.cursor()
+                cursor.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
+                cursor.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
+                self.db_conn.commit()
 
                 self.memory.put(
                     config,
@@ -208,19 +238,11 @@ class AgentService:
         except Exception as e:
             return f"Error executing CHEQ flow: {str(e)}"
 
-    def poll_for_result(self,session_id="default",max_attempts=60, interval=5 ):
+    def poll_for_result(self, session_id="default", max_attempts=60, interval=5):
         self._load_uri_pack(session_id)
         if not self.uri_pack:
             return "Error: No booking context found. Please search for flights first."
 
-        confirm_response = httpx.post(
-            self.uri_pack["confirmation_uri"],
-            json = {"resource_uri": self.uri_pack["resource_uri"]},
-            timeout=10.0
-        )
-
-        if confirm_response.status_code != 200:
-            return f"Error: Failed to trigger confirmation for process"
         for attempt in range(max_attempts):
             try:
                 response = httpx.get(self.uri_pack["result_uri"], timeout=5.0)
@@ -295,6 +317,8 @@ class AgentService:
                 ts = checkpoint.checkpoint.get("ts", "")
                 
                 title = "New Chat"
+                # the creation of the tile we should have ai summaries that chat andd genrate an appropriate title
+                #not just extracting the first human message anf having that as the title for that conversation line 300 -313
                 for msg in messages:
                     if msg.__class__.__name__ == "HumanMessage" or getattr(msg, 'type', '') == 'human':
                         title = getattr(msg, 'content', str(msg))

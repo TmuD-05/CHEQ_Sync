@@ -118,4 +118,39 @@ class SecurityAuthenticationTests(TestCase):
         self.assertTrue(len(cheq["nonce"]) > 10)
         self.assertTrue(cheq["exp"] > time.time())
 
+    def test_select_flight_on_accepted_process_returns_409(self):
+        """
+        POST to select_flight on an already finalized/accepted process returns 409 Conflict
+        """
+        from .models import Result
+        Result.objects.create(process_id=self.process.id, confirmation_status="ACCEPT")
+        url = reverse("resource_server:select_flight", kwargs={"process_token": self.process_token})
+        response = self.client.post(url, data={"selected_flight": "Lufthansa LU561 - $280"}, content_type="application/json")
+        self.assertEqual(response.status_code, 409)
+
+    def test_select_flight_creates_new_process_when_previously_rejected(self):
+        """
+        POST to select_flight when previous choice was rejected spawns an isolated new Process
+        leaving the original process permanently marked as REJECT.
+        """
+        from .models import Result
+        Result.objects.create(process_id=self.process.id, confirmation_status="REJECT")
+        url = reverse("resource_server:select_flight", kwargs={"process_token": self.process_token})
+        response = self.client.post(url, data={"selected_flight": "Lufthansa LU561 - $280"}, content_type="application/json")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("resource_uri", data)
+        self.assertIn("result_uri", data)
+        new_process_id = data["process_id"]
+        self.assertNotEqual(new_process_id, self.process.id)
+
+        # Original process remains untouched and permanently REJECT
+        orig_result = Result.objects.get(process_id=self.process.id)
+        self.assertEqual(orig_result.confirmation_status, "REJECT")
+
+        # New process is created with fresh PENDING status
+        new_result = Result.objects.get(process_id=new_process_id)
+        self.assertEqual(new_result.confirmation_status, "PENDING")
+
+
 

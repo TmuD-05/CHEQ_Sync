@@ -48,7 +48,8 @@ def get_access_token():
     return access_token
 
 class ConfirmationService:
-    def generate_service_jwt(self):
+    @staticmethod
+    def generate_service_jwt():
         with open(os.path.join(BASE_DIR, 'cs_private_key.pem'), 'r') as f:
             signing_key = f.read()
         payload = {
@@ -59,17 +60,27 @@ class ConfirmationService:
         }
         return jwt.encode(payload, signing_key, algorithm="RS256")
 
-    def retrieveCHEQ(self, resource_uri):
+    @classmethod
+    def retrieveCHEQ(cls, *args, **kwargs):
+        # Support both retrieveCHEQ(resource_uri) and legacy retrieveCHEQ(self, resource_uri)
+        resource_uri = kwargs.get("resource_uri") or args[-1]
         try:
-            cheq_endpoint = resource_uri + "cheq/"
-            service_token = self.generate_service_jwt()
+            cheq_endpoint = f"{resource_uri.rstrip('/')}/cheq/"
+            service_token = cls.generate_service_jwt()
             headers = {"Authorization": f"Bearer {service_token}"}
             response = requests.get(cheq_endpoint, headers=headers)
             if response.status_code == 404:
                 raise IndexError
             if response.status_code != 200:
                 raise Exception(f"Resource Server returned status {response.status_code}: {response.text}")
-            CHEQ = response.text.strip('"')
+
+            if response.headers.get("content-type", "").startswith("application/json"):
+                try:
+                    CHEQ = response.json()
+                except Exception:
+                    CHEQ = response.text.strip().strip('"')
+            else:
+                CHEQ = response.text.strip().strip('"')
 
             with open(os.path.join(BASE_DIR, 'rs_public_key.pem'), 'r') as f:
                 verification_key = f.read()
@@ -78,7 +89,10 @@ class ConfirmationService:
             raise e
         return verified_CHEQ
 
-    def sign(self, CHEQ):
+    @classmethod
+    def sign(cls, *args, **kwargs):
+        # Support both sign(CHEQ) and legacy sign(self, CHEQ)
+        CHEQ = kwargs.get("CHEQ") or args[-1]
         try:
             with open(os.path.join(BASE_DIR, 'cs_private_key.pem'), 'r') as f:
                 signing_key = f.read()
@@ -87,12 +101,37 @@ class ConfirmationService:
         except Exception as e:
             raise e
 
-    def sendDecisionToRS(self, CHEQ, decision, resource_uri, extra_data=None):
-        signed_cheq = ConfirmationService.sign(self, CHEQ)
+    @classmethod
+    def sendDecisionToRS(cls, *args, **kwargs):
+        # Support both sendDecisionToRS(CHEQ, decision, resource_uri, extra_data=..., auth_token=...)
+        # and legacy sendDecisionToRS(self, CHEQ, decision, resource_uri, extra_data=..., auth_token=...)
+        if len(args) >= 4 and not isinstance(args[0], (dict, str)):
+            CHEQ, decision, resource_uri = args[1], args[2], args[3]
+        elif len(args) >= 3:
+            CHEQ, decision, resource_uri = args[0], args[1], args[2]
+        else:
+            CHEQ = kwargs.get("CHEQ") or args[0]
+            decision = kwargs.get("decision") or args[1]
+            resource_uri = kwargs.get("resource_uri") or args[2]
+
+        extra_data = kwargs.get("extra_data")
+        auth_token = kwargs.get("auth_token")
+
+        headers = {}
+        if auth_token:
+            headers["Authorization"] = auth_token if auth_token.startswith("Bearer ") else f"Bearer {auth_token}"
+        else:
+            try:
+                headers["Authorization"] = f"Bearer {get_access_token()}"
+            except Exception as e:
+                print(f"Warning: Could not obtain M2M access token: {e}")
+
+        signed_cheq = cls.sign(CHEQ)
         payload = {"signed_CHEQ": signed_cheq}
         if extra_data:
             payload.update(extra_data)
-        response = requests.post(resource_uri,
+        response = requests.post(f"{resource_uri.rstrip('/')}/",
                                  data=payload,
-                                 params={"decision": decision})
+                                 params={"decision": decision},
+                                 headers=headers)
         return response

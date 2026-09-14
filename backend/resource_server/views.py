@@ -116,19 +116,30 @@ class ResourceView(APIView):
             return Response("Expired CHEQ object", status=400)
 
         if nonce and ConsumedNonce.objects.filter(nonce=nonce).exists():
+            if process_id:
+                res = Result.objects.filter(process_id=process_id).first()
+                if res and res.confirmation_status in ["ACCEPT", "REJECT"]:
+                    return Response("Decision for this process already submitted", status=200)
             return Response("Replay attack: Nonce already consumed", status=400)
 
         if process_id == signed_process_id:
             try:
                 result = Result.objects.filter(process_id=signed_process_id).first()
-                if result.confirmation_status == "PENDING":
+                if result:
+                    if result.confirmation_status == "ACCEPT":
+                        if decision == "ACCEPT":
+                            return Response("Decision for this process already submitted", status=200)
+                        return Response("This booking has already been finalized and cannot be modified.", status=409)
+                    if result.confirmation_status == "REJECT":
+                        return Response("This booking has already been rejected.", status=400)
+
                     result.confirmation_status = decision
                     result.save(update_fields=['confirmation_status'])
                     if nonce:
                         ConsumedNonce.objects.create(nonce=nonce, process_id=signed_process_id)
                     return Response(status=200)
                 else:
-                    return Response("Decision for this process already submitted", status=400)
+                    return Response("Process not found", status=404)
             except Exception as e:
                 raise e
         return Response("Process id mismatch", status=400)
@@ -150,6 +161,13 @@ class SelectFlightView(APIView):
             if not resources.exists():
                 return Response(f"No resource found for process {process_id}", status=404)
             
+            result = Result.objects.filter(process_id=process_id).first()
+            if result and result.confirmation_status == "ACCEPT":
+                return Response(
+                    {"detail": "This booking has already been finalized and cannot be modified."}, 
+                    status=409
+                )
+
             flight_number = parse_flight_number(selected_flight)
             flight_obj = Flight.objects.filter(process_id=process_id, flight_number__iexact=flight_number).first()
             if not flight_obj:
@@ -188,11 +206,70 @@ class SelectFlightView(APIView):
                     "airplane": "Boeing 787"
                 }
 
-            for resource in resources:
-                resource.selected_flight = flight_data
-                resource.save(update_fields=["selected_flight"])
-            
-            return Response("Flight selection saved successfully", status=200)
+            primary_resource = resources.first()
+            is_already_selected_or_acted = (
+                primary_resource.selected_flight is not None or 
+                (result and result.confirmation_status != "PENDING")
+            )
+
+            if is_already_selected_or_acted:
+
+                new_process = Process.objects.create()
+                for f in Flight.objects.filter(process_id=process_id):
+                    Flight.objects.create(
+                        process_id=new_process.id,
+                        origin=f.origin,
+                        destination=f.destination,
+                        outbound_date=f.outbound_date,
+                        return_date=f.return_date,
+                        airline=f.airline,
+                        flight_number=f.flight_number,
+                        departure_time=f.departure_time,
+                        arrival_time=f.arrival_time,
+                        duration_minutes=f.duration_minutes,
+                        stops=f.stops,
+                        price=f.price,
+                        airplane=f.airplane
+                    )
+
+                Resource.objects.create(
+                    process_id=new_process.id,
+                    pub_date=timezone.now(),
+                    selected_flight=flight_data
+                )
+                Result.objects.create(
+                    process_id=new_process.id,
+                    confirmation_status="PENDING"
+                )
+                ResourceToConfirmationMapping.objects.create(
+                    process_id=new_process.id,
+                    confirmation_uri="http://127.0.0.1:8000/confirmation_server/trigger_confirmation/"
+                )
+
+                new_process_token = signing.dumps(new_process.id)
+                new_resource_uri = host + reverse("resource_server:resource", kwargs={"process_token": new_process_token})
+                new_result_uri = host + reverse("resource_server:result", kwargs={"process_id": new_process.id})
+
+                return Response({
+                    "message": "Flight selection saved successfully",
+                    "resource_uri": new_resource_uri,
+                    "result_uri": new_result_uri,
+                    "process_id": new_process.id
+                }, status=200)
+            else:
+                for resource in resources:
+                    resource.selected_flight = flight_data
+                    resource.save(update_fields=["selected_flight"])
+
+                cur_resource_uri = host + reverse("resource_server:resource", kwargs={"process_token": process_token})
+                cur_result_uri = host + reverse("resource_server:result", kwargs={"process_id": process_id})
+
+                return Response({
+                    "message": "Flight selection saved successfully",
+                    "resource_uri": cur_resource_uri,
+                    "result_uri": cur_result_uri,
+                    "process_id": process_id
+                }, status=200)
         except Exception as e:
             return Response(str(e), status=500)
 
@@ -216,6 +293,7 @@ class ResourceCHEQView(APIView):
 
                 nonce = str(uuid.uuid4())
                 exp = int(time.time()) + 900
+                res_obj = Result.objects.filter(process_id=process_id).first()
 
                 CHEQ = {
                     "version": 1.0,
@@ -223,6 +301,7 @@ class ResourceCHEQView(APIView):
                     "exp": exp,
                     "operation": resource_execution_uri,
                     "operation name": process_id,
+                    "confirmation_status": res_obj.confirmation_status if res_obj else "PENDING",
                     "inputs" :{
                         "parameters" : serializer.data
                     },
@@ -310,7 +389,7 @@ class ProcessExecutionWithConfirmation(APIView):
             result = Result(process_id=process_id, confirmation_status="PENDING")
             result.save()
 
-        # Obfuscate process_id via secure cryptographic signing
+
         process_token = signing.dumps(process_id)
         resource_uri = host + reverse("resource_server:resource", kwargs={"process_token": process_token} )
         result_uri = host + reverse("resource_server:result", kwargs={"process_id": process_id} )
@@ -327,6 +406,3 @@ class ProcessExecutionWithConfirmation(APIView):
         }
         return Response(response, status=202)
 
-#TODO:
-# implement API endpoint that provides public key for signature verification
-# implement confirmation server auth

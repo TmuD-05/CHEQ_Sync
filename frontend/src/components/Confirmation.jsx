@@ -48,6 +48,9 @@ export default function Confirmation({ resourceUri, accessToken, onBack }) {
   const fetchCheqDetails = async () => {
     setLoading(true);
     setError(null);
+    setCompletionState(null);
+    setActionLoading(null);
+    setConsentChecked(false);
     try {
       const headers = {
         "Content-Type": "application/json",
@@ -70,6 +73,13 @@ export default function Confirmation({ resourceUri, accessToken, onBack }) {
       const data = await response.json();
       setCheqPayload(data.CHEQ);
       setPerformUri(data.perform_confirmation_uri);
+
+      // Check if this booking was already successfully accepted
+      const existingStatus = data.CHEQ?.confirmation_status;
+      if (existingStatus === "ACCEPT") {
+        setCompletionState("success");
+        return;
+      }
 
       // Extract flight information from the inputs parameters
       const parameters = data.CHEQ?.inputs?.parameters || [];
@@ -168,7 +178,7 @@ export default function Confirmation({ resourceUri, accessToken, onBack }) {
           </div>
           <h2>Flight Booking Not Found</h2>
           <p className="error-desc">{error}</p>
-          <button className="back-btn" onClick={onBack}>Go back to chat</button>
+          <button className="back-btn" onClick={() => onBack(null)}>Go back to chat</button>
         </div>
       </div>
     );

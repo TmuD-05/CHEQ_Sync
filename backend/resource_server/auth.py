@@ -3,8 +3,7 @@ import jwt
 from django.conf import settings
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from core.crypto import get_jwks_cache
 
 class ConfirmationServerUser:
     def __init__(self, token_payload):
@@ -22,6 +21,10 @@ class ConfirmationServerUser:
         return True
 
 class ConfirmationServerAuthentication(BaseAuthentication):
+    """
+    Authenticates requests coming from the Confirmation Server using
+    public signing keys discovered dynamically via JWKS (No in-process shortcuts, no disk PEMs).
+    """
     def authenticate(self, request):
         auth_header = request.headers.get("Authorization")
         if not auth_header:
@@ -38,11 +41,22 @@ class ConfirmationServerAuthentication(BaseAuthentication):
 
         token = parts[1]
 
-        try:
-            cs_public_key_path = os.path.join(BASE_DIR, 'cs_public_key.pem')
-            with open(cs_public_key_path, 'r') as f:
-                verification_key = f.read()
+        cs_jwks_url = getattr(
+            settings,
+            'CONFIRMATION_SERVER_JWKS_URL',
+            'http://127.0.0.1:8000/confirmation_server/.well-known/jwks.json'
+        )
+        cache = get_jwks_cache()
 
+        try:
+            unverified_header = jwt.get_unverified_header(token)
+            kid = unverified_header.get("kid")
+            cs_pub_key = cache.get_key(cs_jwks_url, kid=kid, use="sig")
+            verification_key = cs_pub_key.export_to_pem(private_key=False).decode("utf-8")
+        except Exception as e:
+            raise AuthenticationFailed(f"Confirmation Server public key unavailable or invalid: {e}")
+
+        try:
             payload = jwt.decode(
                 token,
                 verification_key,

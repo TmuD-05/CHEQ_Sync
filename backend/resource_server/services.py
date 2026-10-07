@@ -1,39 +1,17 @@
-import os
-import time
+import json
 import jwt
-import requests
+from typing import Optional, Dict, Any
 from django.conf import settings
 from rest_framework.exceptions import AuthenticationFailed
-
-# BASE_DIR points to the project root where the .pem key files are stored
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-_jwks_cache = {
-    "keys": [],
-    "fetched_at": 0
-}
-
-def get_jwks():
-    global _jwks_cache
-    now = time.time()
-    if _jwks_cache["keys"] and now - _jwks_cache["fetched_at"] < 3600:
-        return _jwks_cache["keys"]
-
-    domain = getattr(settings, 'AUTH0_DOMAIN', None)
-    if not domain:
-        raise ValueError("Missing AUTH0_DOMAIN setting.")
-
-    jwks_url = f"https://{domain}/.well-known/jwks.json"
-    response = requests.get(jwks_url)
-    response.raise_for_status()
-    jwks = response.json()
-    _jwks_cache["keys"] = jwks.get("keys", [])
-    _jwks_cache["fetched_at"] = now
-    return _jwks_cache["keys"]
+from core.crypto import (
+    get_rs_key_manager,
+    get_jwks_cache,
+    NestedTokenService,
+)
 
 class SignatureService:
     @staticmethod
-    def verify_auth0_token(token):
+    def verify_auth0_token(token: str) -> Dict[str, Any]:
         try:
             unverified_header = jwt.get_unverified_header(token)
         except Exception:
@@ -43,33 +21,24 @@ class SignatureService:
         if not kid:
             raise AuthenticationFailed("Token header is missing 'kid'.")
 
+        domain = getattr(settings, 'AUTH0_DOMAIN', None)
+        if not domain:
+            raise ValueError("Missing AUTH0_DOMAIN setting.")
+
+        jwks_url = f"https://{domain}/.well-known/jwks.json"
+        cache = get_jwks_cache()
+
         try:
-            keys = get_jwks()
+            rsa_key = cache.get_key(jwks_url, kid=kid, use="sig")
         except Exception as e:
-            raise AuthenticationFailed(f"Failed to retrieve JWKS: {e}")
-
-        rsa_key = {}
-        for key in keys:
-            if key["kid"] == kid:
-                rsa_key = {
-                    "kty": key["kty"],
-                    "kid": key["kid"],
-                    "use": key["use"],
-                    "n": key["n"],
-                    "e": key["e"]
-                }
-                break
-
-        if not rsa_key:
-            raise AuthenticationFailed("Unable to find appropriate key in JWKS.")
+            raise AuthenticationFailed(f"Failed to retrieve Auth0 signing key: {e}")
 
         try:
             from jwt.algorithms import RSAAlgorithm
-            public_key = RSAAlgorithm.from_jwk(rsa_key)
+            public_key = RSAAlgorithm.from_jwk(json.loads(rsa_key.export_public()))
         except Exception as e:
             raise AuthenticationFailed(f"Failed to parse public key from JWK: {e}")
 
-        domain = getattr(settings, 'AUTH0_DOMAIN', None)
         audience = getattr(settings, 'AUTH0_AUDIENCE', None)
 
         try:
@@ -87,22 +56,74 @@ class SignatureService:
         except jwt.InvalidTokenError as e:
             raise AuthenticationFailed(f"Invalid token: {e}")
 
-    def sign(self, CHEQ):
+    @classmethod
+    def sign(cls, CHEQ: Dict[str, Any], encrypt_for_cs: bool = False, cs_jwks_url: Optional[str] = None) -> str:
+        """
+        Signs the CHEQ using RS private signing key.
+        If encrypt_for_cs is True, encapsulates in JWE encrypted with CS public encryption key
+        fetched over HTTP via JWKSCache (Nested JWS-in-JWE / Sign-then-Encrypt).
+        """
         try:
+            rs_km = get_rs_key_manager()
+            if encrypt_for_cs:
+                if not cs_jwks_url:
+                    cs_jwks_url = getattr(
+                        settings,
+                        'CONFIRMATION_SERVER_JWKS_URL',
+                        'http://127.0.0.1:8000/confirmation_server/.well-known/jwks.json'
+                    )
+                cache = get_jwks_cache()
+                cs_enc_key = cache.get_key(cs_jwks_url, use="enc")
 
-            with open(os.path.join(BASE_DIR, 'rs_private_key.pem'), 'r') as f:
-                signing_key = f.read()
-            encoded_jwt = jwt.encode({"CHEQ": CHEQ}, signing_key, algorithm="RS256")
-            return encoded_jwt
+                return NestedTokenService.create_nested_token(
+                    payload={"CHEQ": CHEQ},
+                    signer_key=rs_km.signing_key,
+                    recipient_enc_key=cs_enc_key,
+                    issuer="resource_server",
+                    audience="confirmation_server"
+                )
+            else:
+                signing_pem = rs_km.export_signing_private_pem()
+                return jwt.encode({"CHEQ": CHEQ}, signing_pem, algorithm="RS256")
         except Exception as e:
             raise e
 
-    def verify(self, CHEQ):
+    @classmethod
+    def verify(cls, CHEQ_token: str, cs_jwks_url: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Verifies and decrypts CHEQ token received from Confirmation Server.
+        Retrieves CS public signing key strictly via JWKSCache (No in-process shortcuts, no disk PEMs).
+        """
         try:
+            parts = CHEQ_token.strip().split(".")
+            if not cs_jwks_url:
+                cs_jwks_url = getattr(
+                    settings,
+                    'CONFIRMATION_SERVER_JWKS_URL',
+                    'http://127.0.0.1:8000/confirmation_server/.well-known/jwks.json'
+                )
 
-            with open(os.path.join(BASE_DIR, 'cs_public_key.pem'), 'r') as f:
-                verification_key = f.read()
-            decoded_jwt = jwt.decode(CHEQ, verification_key, algorithms=["RS256"], verify_signature=True, require=["CHEQ"])
-            return decoded_jwt
+            rs_km = get_rs_key_manager()
+            cache = get_jwks_cache()
+
+            if len(parts) == 5:
+                # 5-part Nested JWE token - decrypt with RS key manager, verify CS signature via JWKSCache
+                return NestedTokenService.decrypt_and_verify_nested_token(
+                    token_string=CHEQ_token,
+                    recipient_enc_key=rs_km,
+                    jwks_cache=cache,
+                    sender_jwks_url=cs_jwks_url,
+                    expected_issuer="confirmation_server",
+                    expected_audience="resource_server"
+                )
+            elif len(parts) == 3:
+                # 3-part Legacy JWS token - verify CS signature using JWKSCache
+                unverified_header = jwt.get_unverified_header(CHEQ_token)
+                kid = unverified_header.get("kid")
+                cs_pub_key = cache.get_key(cs_jwks_url, kid=kid, use="sig")
+                verification_pem = cs_pub_key.export_to_pem(private_key=False).decode("utf-8")
+                return jwt.decode(CHEQ_token, verification_pem, algorithms=["RS256"], verify_signature=True)
+            else:
+                raise ValueError("Invalid token format: expected 3 or 5 compact segments.")
         except Exception as e:
             raise e

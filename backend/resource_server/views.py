@@ -85,27 +85,27 @@ class ResourceView(APIView):
         except AuthenticationFailed as e:
             return Response({"detail": str(e)}, status=401)
         data = request.data
-        if request.query_params["decision"] not in valid_decisions:
-            print(f"Invalid decision")
-            return Response("Invalid decision", status=422)
-        else:
-            decision = request.query_params["decision"]
 
         try:
             process_id = get_process_id_from_token(process_token)
         except ValidationError as e:
             return Response(str(e), status=422)
 
-        if type(data) is not QueryDict:
+        if type(data) is not QueryDict and type(data) is not dict:
             return Response(status=415)
         if "signed_CHEQ" not in data.keys():
             return Response(status=422)
 
         CHEQ = data["signed_CHEQ"]
         try:
-            verifed_cheq = SignatureService.verify(self, CHEQ)
+            verifed_cheq = SignatureService.verify(CHEQ)
         except Exception as e:
             return Response("Signature verification failed", status=400)
+
+        decision = verifed_cheq.get("decision")
+        if not decision or decision not in valid_decisions:
+            print("Invalid or missing decision")
+            return Response("Invalid or missing decision in signed token", status=422)
 
         cheq_payload = verifed_cheq.get("CHEQ", {})
         signed_process_id = cheq_payload.get("operation name")
@@ -307,8 +307,14 @@ class ResourceCHEQView(APIView):
                     },
                     "date": datetime.now().strftime("%Y-%m-%d, %H:%M:%S.%f")
                 }
+                accept_header = request.headers.get("Accept", "")
+                encrypt_for_cs = (
+                    "application/jose+json" in accept_header or
+                    request.headers.get("X-Accept-JWE") == "true" or
+                    request.query_params.get("nested") == "true"
+                )
                 try:
-                    signed_CHEQ = SignatureService.sign(self, CHEQ)
+                    signed_CHEQ = SignatureService.sign(CHEQ, encrypt_for_cs=encrypt_for_cs)
                 except Exception:
                     return Response(status=422)
                 return Response(signed_CHEQ, status=200)
@@ -316,18 +322,6 @@ class ResourceCHEQView(APIView):
                 return Response(status=404)
         else:
             return Response(status=422)
-
-
-class PublicKeyView(APIView):
-    def get(self, request):
-        try:
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            rs_public_key_path = os.path.join(base_dir, 'rs_public_key.pem')
-            with open(rs_public_key_path, 'r') as f:
-                pub_key = f.read()
-            return Response({"public_key": pub_key}, status=200)
-        except Exception as e:
-            return Response({"error": str(e)}, status=500)
 
 
 class ResultView(APIView):

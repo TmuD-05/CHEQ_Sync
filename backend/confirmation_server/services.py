@@ -2,10 +2,14 @@ import os
 import time
 import jwt
 import requests
+from typing import Optional, Dict, Any
 from django.conf import settings
-
-# BASE_DIR points to the project root where the .pem key files are stored
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from core.crypto import (
+    get_cs_key_manager,
+    get_jwks_cache,
+    NestedTokenService,
+    TokenValidationError
+)
 
 _token_cache = {
     "access_token": None,
@@ -47,27 +51,38 @@ def get_access_token():
 
     return access_token
 
+def derive_rs_jwks_url(resource_uri: str) -> str:
+    if "/resource/" in resource_uri:
+        base = resource_uri.split("/resource/")[0].rstrip("/")
+    else:
+        # Fallback if no trailing slash in resource segment
+        idx = resource_uri.rfind("/resource")
+        base = resource_uri[:idx].rstrip("/") if idx != -1 else resource_uri.rstrip("/")
+    return f"{base}/.well-known/jwks.json"
+
 class ConfirmationService:
     @staticmethod
     def generate_service_jwt():
-        with open(os.path.join(BASE_DIR, 'cs_private_key.pem'), 'r') as f:
-            signing_key = f.read()
+        cs_km = get_cs_key_manager()
+        signing_key = cs_km.export_signing_private_pem()
         payload = {
             "iss": "confirmation_server",
             "aud": "resource_server",
             "iat": int(time.time()),
             "exp": int(time.time()) + 60
         }
-        return jwt.encode(payload, signing_key, algorithm="RS256")
+        headers = {"kid": cs_km.sig_kid}
+        return jwt.encode(payload, signing_key, algorithm="RS256", headers=headers)
 
     @classmethod
-    def retrieveCHEQ(cls, *args, **kwargs):
-        # Support both retrieveCHEQ(resource_uri) and legacy retrieveCHEQ(self, resource_uri)
-        resource_uri = kwargs.get("resource_uri") or args[-1]
+    def retrieveCHEQ(cls, resource_uri: str, rs_jwks_url: Optional[str] = None) -> dict:
         try:
             cheq_endpoint = f"{resource_uri.rstrip('/')}/cheq/"
             service_token = cls.generate_service_jwt()
-            headers = {"Authorization": f"Bearer {service_token}"}
+            headers = {
+                "Authorization": f"Bearer {service_token}",
+                "Accept": "application/jose+json, application/json"
+            }
             response = requests.get(cheq_endpoint, headers=headers)
             if response.status_code == 404:
                 raise IndexError
@@ -82,41 +97,72 @@ class ConfirmationService:
             else:
                 CHEQ = response.text.strip().strip('"')
 
-            with open(os.path.join(BASE_DIR, 'rs_public_key.pem'), 'r') as f:
-                verification_key = f.read()
-            verified_CHEQ = jwt.decode(CHEQ, verification_key, algorithms=["RS256"], verify_signature=True, require=["CHEQ"])
+            parts = CHEQ.strip().split(".")
+            if not rs_jwks_url:
+                rs_jwks_url = derive_rs_jwks_url(resource_uri)
+
+            cs_km = get_cs_key_manager()
+            cache = get_jwks_cache()
+
+            if len(parts) == 5:
+                # Nested JWE token - decrypt using CS KeyManager (supports active & retired keys)
+                verified_CHEQ = NestedTokenService.decrypt_and_verify_nested_token(
+                    token_string=CHEQ,
+                    recipient_enc_key=cs_km,
+                    jwks_cache=cache,
+                    sender_jwks_url=rs_jwks_url,
+                    expected_issuer="resource_server",
+                    expected_audience="confirmation_server"
+                )
+            elif len(parts) == 3:
+                # Legacy JWS token - verify RS signature using JWKSCache
+                unverified_header = jwt.get_unverified_header(CHEQ)
+                kid = unverified_header.get("kid")
+                rs_pub_key = cache.get_key(rs_jwks_url, kid=kid, use="sig")
+                verification_pem = rs_pub_key.export_to_pem(private_key=False).decode("utf-8")
+                verified_CHEQ = jwt.decode(CHEQ, verification_pem, algorithms=["RS256"], verify_signature=True, require=["CHEQ"])
+            else:
+                raise ValueError("Invalid token format received from Resource Server.")
+
         except Exception as e:
             raise e
         return verified_CHEQ
 
     @classmethod
-    def sign(cls, *args, **kwargs):
-        # Support both sign(CHEQ) and legacy sign(self, CHEQ)
-        CHEQ = kwargs.get("CHEQ") or args[-1]
-        try:
-            with open(os.path.join(BASE_DIR, 'cs_private_key.pem'), 'r') as f:
-                signing_key = f.read()
-            encoded_jwt = jwt.encode({"CHEQ": CHEQ}, signing_key, algorithm="RS256")
-            return encoded_jwt
-        except Exception as e:
-            raise e
+    def sign(cls, payload: dict, rs_jwks_url: Optional[str] = None, encrypt_for_rs: bool = True) -> str:
+        token_payload = payload if (isinstance(payload, dict) and "CHEQ" in payload) else {"CHEQ": payload}
+        cs_km = get_cs_key_manager()
+        if not encrypt_for_rs:
+            signing_pem = cs_km.export_signing_private_pem()
+            return jwt.encode(token_payload, signing_pem, algorithm="RS256")
+
+        cache = get_jwks_cache()
+        if not rs_jwks_url:
+            rs_jwks_url = getattr(
+                settings,
+                'RS_JWKS_URL',
+                'http://127.0.0.1:8000/resource_server/.well-known/jwks.json'
+            )
+        recipient_enc_key = cache.get_key(rs_jwks_url, use="enc")
+
+        return NestedTokenService.create_nested_token(
+            payload=token_payload,
+            signer_key=cs_km.signing_key,
+            recipient_enc_key=recipient_enc_key,
+            issuer="confirmation_server",
+            audience="resource_server"
+        )
 
     @classmethod
-    def sendDecisionToRS(cls, *args, **kwargs):
-        # Support both sendDecisionToRS(CHEQ, decision, resource_uri, extra_data=..., auth_token=...)
-        # and legacy sendDecisionToRS(self, CHEQ, decision, resource_uri, extra_data=..., auth_token=...)
-        if len(args) >= 4 and not isinstance(args[0], (dict, str)):
-            CHEQ, decision, resource_uri = args[1], args[2], args[3]
-        elif len(args) >= 3:
-            CHEQ, decision, resource_uri = args[0], args[1], args[2]
-        else:
-            CHEQ = kwargs.get("CHEQ") or args[0]
-            decision = kwargs.get("decision") or args[1]
-            resource_uri = kwargs.get("resource_uri") or args[2]
-
-        extra_data = kwargs.get("extra_data")
-        auth_token = kwargs.get("auth_token")
-
+    def sendDecisionToRS(
+        cls,
+        CHEQ: dict,
+        decision: str,
+        resource_uri: str,
+        extra_data: Optional[dict] = None,
+        auth_token: Optional[str] = None,
+        rs_jwks_url: Optional[str] = None
+    ) -> requests.Response:
         headers = {}
         if auth_token:
             headers["Authorization"] = auth_token if auth_token.startswith("Bearer ") else f"Bearer {auth_token}"
@@ -126,12 +172,24 @@ class ConfirmationService:
             except Exception as e:
                 print(f"Warning: Could not obtain M2M access token: {e}")
 
-        signed_cheq = cls.sign(CHEQ)
+        if not rs_jwks_url:
+            rs_jwks_url = derive_rs_jwks_url(resource_uri)
+
+        # Bind decision cryptographically within the signed & encrypted token payload
+        token_payload = {
+            "CHEQ": CHEQ,
+            "decision": decision
+        }
+        signed_cheq = cls.sign(token_payload, rs_jwks_url=rs_jwks_url, encrypt_for_rs=True)
+
         payload = {"signed_CHEQ": signed_cheq}
         if extra_data:
             payload.update(extra_data)
-        response = requests.post(f"{resource_uri.rstrip('/')}/",
-                                 data=payload,
-                                 params={"decision": decision},
-                                 headers=headers)
+
+        # Do NOT pass decision in URL query parameters. It is bound inside signed_CHEQ.
+        response = requests.post(
+            f"{resource_uri.rstrip('/')}/",
+            data=payload,
+            headers=headers
+        )
         return response

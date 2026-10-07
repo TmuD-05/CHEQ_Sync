@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'core.apps.CoreConfig',
     'confirmation_server.apps.ConfirmationServerConfig',
     'resource_server.apps.ResourceServerConfig',
     'ai_agent',
@@ -82,6 +83,7 @@ WSGI_APPLICATION = 'CHEQ.wsgi.application'
 REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
+        'core.renderers.JoseRenderer',
         'rest_framework.renderers.BrowsableAPIRenderer',
     ],
 }

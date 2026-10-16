@@ -1,6 +1,5 @@
 import uuid
 import re
-import os
 import time
 import requests
 # pyrefly: ignore [missing-import]
@@ -18,7 +17,7 @@ from rest_framework.permissions import IsAuthenticated
 from .serializers import ResourceSerializer, ResourceToConfirmationMappingSerializer, ResultSerializer
 from datetime import datetime
 from .services import SignatureService
-from .auth import ConfirmationServerAuthentication
+from .auth import ConfirmationServerAuthentication, AIAgentAuthentication
 from django.utils import timezone
 
 host = "http://127.0.0.1:8000"
@@ -146,6 +145,9 @@ class ResourceView(APIView):
 
 
 class SelectFlightView(APIView):
+    authentication_classes = [AIAgentAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def post(self, request, process_token):
         try:
             process_id = get_process_id_from_token(process_token)
@@ -325,6 +327,9 @@ class ResourceCHEQView(APIView):
 
 
 class ResultView(APIView):
+    authentication_classes = [AIAgentAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, process_id):
         if process_id:
             if type(process_id) is int:
@@ -338,6 +343,9 @@ class ResultView(APIView):
 
 
 class ProcessExecutionWithConfirmation(APIView):
+    authentication_classes = [AIAgentAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def post(self, request):
         params = request.data
         response = requests.post("http://127.0.0.1:8000/airline_api/search_flights/", json=params)

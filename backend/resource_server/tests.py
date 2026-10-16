@@ -116,25 +116,47 @@ class SecurityAuthenticationTests(TestCase):
         self.assertTrue(len(cheq["nonce"]) > 10)
         self.assertTrue(cheq["exp"] > time.time())
 
-    def test_select_flight_on_accepted_process_returns_409(self):
+    @patch('resource_server.services.SignatureService.verify_auth0_token')
+    def test_select_flight_on_accepted_process_returns_409(self, mock_verify):
         """
         POST to select_flight on an already finalized/accepted process returns 409 Conflict
         """
         from .models import Result
+        mock_verify.return_value = {
+            "sub": "ai_agent_client@clients",
+            "azp": "ai_agent_client",
+            "gty": "client-credentials"
+        }
         Result.objects.create(process_id=self.process.id, confirmation_status="ACCEPT")
         url = reverse("resource_server:select_flight", kwargs={"process_token": self.process_token})
-        response = self.client.post(url, data={"selected_flight": "Lufthansa LU561 - $280"}, content_type="application/json")
+        response = self.client.post(
+            url,
+            data={"selected_flight": "Lufthansa LU561 - $280"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer mock_ai_agent_token"
+        )
         self.assertEqual(response.status_code, 409)
 
-    def test_select_flight_creates_new_process_when_previously_rejected(self):
+    @patch('resource_server.services.SignatureService.verify_auth0_token')
+    def test_select_flight_creates_new_process_when_previously_rejected(self, mock_verify):
         """
         POST to select_flight when previous choice was rejected spawns an isolated new Process
         leaving the original process permanently marked as REJECT.
         """
         from .models import Result
+        mock_verify.return_value = {
+            "sub": "ai_agent_client@clients",
+            "azp": "ai_agent_client",
+            "gty": "client-credentials"
+        }
         Result.objects.create(process_id=self.process.id, confirmation_status="REJECT")
         url = reverse("resource_server:select_flight", kwargs={"process_token": self.process_token})
-        response = self.client.post(url, data={"selected_flight": "Lufthansa LU561 - $280"}, content_type="application/json")
+        response = self.client.post(
+            url,
+            data={"selected_flight": "Lufthansa LU561 - $280"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer mock_ai_agent_token"
+        )
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("resource_uri", data)
@@ -348,6 +370,97 @@ class SecurityAuthenticationTests(TestCase):
             HTTP_AUTHORIZATION="Bearer mock_token"
         )
         self.assertEqual(response.status_code, 422)
+
+
+class AIAgentAuthenticationTests(TestCase):
+    def setUp(self):
+        from .models import Result
+        self.client = Client()
+        self.process = Process.objects.create()
+        self.process_token = signing.dumps(self.process.id)
+        Resource.objects.create(
+            process_id=self.process.id,
+            pub_date=timezone.now(),
+        )
+        Result.objects.create(process_id=self.process.id, confirmation_status="PENDING")
+
+    def test_ai_agent_endpoints_reject_unauthenticated_requests(self):
+        """
+        All 3 AI Agent endpoints on Resource Server must reject unauthenticated calls with 401/403.
+        """
+        exec_url = reverse("resource_server:execute_process_with_confirmation")
+        select_url = reverse("resource_server:select_flight", kwargs={"process_token": self.process_token})
+        result_url = reverse("resource_server:result", kwargs={"process_id": self.process.id})
+
+        resp1 = self.client.post(exec_url, data={}, content_type="application/json")
+        resp2 = self.client.post(select_url, data={"selected_flight": "UA100"}, content_type="application/json")
+        resp3 = self.client.get(result_url)
+
+        self.assertIn(resp1.status_code, [401, 403])
+        self.assertIn(resp2.status_code, [401, 403])
+        self.assertIn(resp3.status_code, [401, 403])
+
+    @patch("resource_server.views.requests.post")
+    @patch("resource_server.services.SignatureService.verify_auth0_token")
+    def test_ai_agent_authenticated_endpoints_succeed(self, mock_verify, mock_airline_post):
+        """
+        Valid AI Agent M2M JWT (gty=client-credentials, @clients sub) is accepted
+        across execute_process_with_confirmation (202), select_flight (200), and result (200)
+        without the Resource Server needing to know AI_AGENT_CLIENT_ID in settings.
+        """
+        mock_verify.return_value = {
+            "iss": "https://dev-q172gr40txifrff3.us.auth0.com/",
+            "sub": "ai_agent_m2m_client_123@clients",
+            "aud": "https://cheq-sync-api",
+            "azp": "ai_agent_m2m_client_123",
+            "gty": "client-credentials"
+        }
+        mock_airline_post.return_value.json.return_value = {"best_flights": []}
+
+        # 1. Trigger confirmation (202 Accepted)
+        exec_url = reverse("resource_server:execute_process_with_confirmation")
+        resp_exec = self.client.post(
+            exec_url,
+            data={"origin": "YVR", "destination": "NRT"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer valid_ai_agent_jwt"
+        )
+        self.assertEqual(resp_exec.status_code, 202)
+        self.assertIn("resource_uri", resp_exec.json())
+
+        # 2. Select flight (200 OK)
+        select_url = reverse("resource_server:select_flight", kwargs={"process_token": self.process_token})
+        resp_select = self.client.post(
+            select_url,
+            data={"selected_flight": "ANA NH135 - $1,742"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer valid_ai_agent_jwt"
+        )
+        self.assertEqual(resp_select.status_code, 200)
+
+        # 3. Poll result (200 OK)
+        result_url = reverse("resource_server:result", kwargs={"process_id": self.process.id})
+        resp_result = self.client.get(
+            result_url,
+            HTTP_AUTHORIZATION="Bearer valid_ai_agent_jwt"
+        )
+        self.assertEqual(resp_result.status_code, 200)
+
+    @patch("resource_server.services.SignatureService.verify_auth0_token")
+    def test_human_user_token_rejected_on_ai_agent_endpoint(self, mock_verify):
+        """
+        A human user token (missing gty=client-credentials and @clients subject) is rejected with 401/403.
+        """
+        mock_verify.return_value = {
+            "iss": "https://dev-q172gr40txifrff3.us.auth0.com/",
+            "sub": "auth0|64a9f1234567890",
+            "aud": "https://cheq-sync-api"
+        }
+        result_url = reverse("resource_server:result", kwargs={"process_id": self.process.id})
+        resp = self.client.get(result_url, HTTP_AUTHORIZATION="Bearer human_user_jwt")
+        self.assertIn(resp.status_code, [401, 403])
+
+
 
 
 

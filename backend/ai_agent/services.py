@@ -9,8 +9,53 @@ import os
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langchain_core.messages import HumanMessage,  ToolMessage
 from langchain_anthropic import ChatAnthropic
+from django.conf import settings
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+_ai_token_cache = {
+    "access_token": None,
+    "expires_at": 0
+}
+
+def get_ai_agent_access_token():
+    global _ai_token_cache
+    now = time.time()
+    if _ai_token_cache["access_token"] and now < _ai_token_cache["expires_at"] - 300:
+        return _ai_token_cache["access_token"]
+
+    domain = getattr(settings, 'AUTH0_DOMAIN', None)
+    client_id = getattr(settings, 'AI_AGENT_CLIENT_ID', None)
+    client_secret = getattr(settings, 'AI_AGENT_CLIENT_SECRET', None)
+    audience = getattr(settings, 'AUTH0_AUDIENCE', None)
+
+    if not all([domain, client_id, client_secret, audience]):
+        raise ValueError("Missing Auth0 M2M configurations for AI Agent in settings/environment variables.")
+
+    url = f"https://{domain}/oauth/token"
+    headers = {"content-type": "application/json"}
+    payload = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "audience": audience,
+        "grant_type": "client_credentials"
+    }
+
+    response = httpx.post(url, json=payload, headers=headers, timeout=10.0)
+    response.raise_for_status()
+    data = response.json()
+
+    access_token = data["access_token"]
+    expires_in = data.get("expires_in", 86400)
+
+    _ai_token_cache["access_token"] = access_token
+    _ai_token_cache["expires_at"] = now + expires_in
+
+    return access_token
+
+def _get_auth_headers(self):
+    token = get_ai_agent_access_token()
+    return {"Authorization": f"Bearer {token}"}
 
 class AgentService:
     def __init__(self):
@@ -143,6 +188,7 @@ class AgentService:
                                     resp = httpx.post(
                                         f"{self.uri_pack['resource_uri'].rstrip('/')}/select_flight/",
                                         json={"selected_flight": selected_flight},
+                                        headers=self._get_auth_headers(),
                                         timeout=10.0
                                     )
                                     if resp.status_code == 409:
@@ -213,12 +259,17 @@ class AgentService:
                 )
                 return final_response
 
+    def _get_auth_headers(self):
+        token = get_ai_agent_access_token()
+        return {"Authorization": f"Bearer {token}"}
+
     def execute_cheq_flow(self, params,session_id="default"):
         try:
 
             response = httpx.post(
                 'http://127.0.0.1:8000/resource_server/execute_process_with_confirmation/',
                 json= params,
+                headers=self._get_auth_headers(),
                 timeout=40.0
             )
 
@@ -245,7 +296,11 @@ class AgentService:
 
         for attempt in range(max_attempts):
             try:
-                response = httpx.get(self.uri_pack["result_uri"], timeout=5.0)
+                response = httpx.get(
+                    self.uri_pack["result_uri"],
+                    headers=self._get_auth_headers(),
+                    timeout=5.0
+                )
                 result = response.json()
 
                 if result and len(result) > 0:

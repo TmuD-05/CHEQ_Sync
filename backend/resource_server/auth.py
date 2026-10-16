@@ -76,3 +76,58 @@ class ConfirmationServerAuthentication(BaseAuthentication):
             raise AuthenticationFailed("Confirmation Server service token decoding failed.")
         except Exception as e:
             raise AuthenticationFailed(f"Confirmation Server authentication failed: {str(e)}")
+
+
+class AIAgentUser:
+    def __init__(self, token_payload):
+        self.payload = token_payload
+        self.username = token_payload.get("sub", "ai_agent")
+        self.is_authenticated = True
+        self.is_ai_agent = True
+
+    def __str__(self):
+        return self.username
+
+    def is_anonymous(self):
+        return False
+
+    def is_active(self):
+        return True
+
+
+class AIAgentAuthentication(BaseAuthentication):
+    """
+    Authenticates requests coming from the AI Agent using an Auth0 OAuth 2.0
+    Client Credentials Grant (M2M) JWT access token and verifies that the caller
+    is identified as an AI Agent (via gty=client-credentials or @clients subject).
+    """
+    def authenticate(self, request):
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return None
+
+        parts = auth_header.split()
+        if parts[0].lower() != "bearer":
+            return None
+
+        if len(parts) == 1:
+            raise AuthenticationFailed("Invalid token header. No credentials provided.")
+        elif len(parts) > 2:
+            raise AuthenticationFailed("Invalid token header. Token string should not contain spaces.")
+
+        token = parts[1]
+
+        from .services import SignatureService
+        payload = SignatureService.verify_auth0_token(token)
+
+        gty = payload.get("gty")
+        sub = str(payload.get("sub", ""))
+
+        # Verify the token was issued via an M2M Client Credentials grant (not a human user session)
+        is_m2m = (gty == "client-credentials") or sub.endswith("@clients")
+        if not is_m2m:
+            raise AuthenticationFailed("Token does not identify caller as an AI Agent (not a client-credentials grant).")
+
+        user = AIAgentUser(payload)
+        return (user, token)
+

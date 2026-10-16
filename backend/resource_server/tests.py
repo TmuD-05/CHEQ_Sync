@@ -22,7 +22,7 @@ class ResourceModelTests(TestCase):
         """
         process 1 has 3 steps in it
         """
-        process_1 = Resource.get_all_steps_in_process(process_id=1)
+        process_1 = Resource.get_all_steps_in_process(process_id="f47ac10b-58cc-4372-a567-0e02b2c3d479")
         self.assertEqual(len(process_1), 3)
 
 
@@ -33,20 +33,20 @@ class ResourceServerAuthTests(APITestCase):
     fixtures = ['initial_resources.json']
 
     def setUp(self):
-        self.process_token = signing.dumps(1)
+        self.process_id = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
 
     def test_get_cheq_without_auth_header_fails(self):
-        url = reverse('resource_server:resource_cheq', kwargs={"process_token": self.process_token})
+        url = reverse('resource_server:resource_cheq', kwargs={"process_id": self.process_id})
         response = self.client.get(url)
         self.assertIn(response.status_code, [401, 403])
 
     def test_get_cheq_with_invalid_auth_header_fails(self):
-        url = reverse('resource_server:resource_cheq', kwargs={"process_token": self.process_token})
+        url = reverse('resource_server:resource_cheq', kwargs={"process_id": self.process_id})
         response = self.client.get(url, HTTP_AUTHORIZATION="invalid_format")
         self.assertIn(response.status_code, [401, 403])
 
     def test_post_decision_without_auth_header_fails(self):
-        url = reverse('resource_server:resource', kwargs={"process_token": self.process_token})
+        url = reverse('resource_server:resource', kwargs={"process_id": self.process_id})
         response = self.client.post(url, data={"signed_CHEQ": "token"}, QUERY_STRING="decision=ACCEPT")
         self.assertIn(response.status_code, [200, 400, 401, 403, 422])
 
@@ -56,7 +56,6 @@ class SecurityAuthenticationTests(TestCase):
         from core.crypto import get_cs_key_manager, get_jwks_cache
         self.client = Client()
         self.process = Process.objects.create()
-        self.process_token = signing.dumps(self.process.id)
         Resource.objects.create(
             process_id=self.process.id,
             pub_date=timezone.now(),
@@ -83,7 +82,7 @@ class SecurityAuthenticationTests(TestCase):
         """
         GET request without Authorization header must return 401 or 403 permission denied
         """
-        url = reverse("resource_server:resource_cheq", kwargs={"process_token": self.process_token})
+        url = reverse("resource_server:resource_cheq", kwargs={"process_id": self.process.id})
         response = self.client.get(url)
         self.assertIn(response.status_code, [401, 403])
 
@@ -91,17 +90,17 @@ class SecurityAuthenticationTests(TestCase):
         """
         GET request with valid CS Service JWT returns 200 OK and signed CHEQ object
         """
-        url = reverse("resource_server:resource_cheq", kwargs={"process_token": self.process_token})
+        url = reverse("resource_server:resource_cheq", kwargs={"process_id": self.process.id})
         token = self.generate_valid_cs_token()
         response = self.client.get(url, HTTP_AUTHORIZATION=f"Bearer {token}")
         self.assertEqual(response.status_code, 200)
 
     def test_cheq_contains_nonce_and_exp(self):
         """
-        GET /resource_server/resource/<token>/cheq/ returns signed CHEQ containing nonce and exp
+        GET /resource_server/resource/<uuid>/cheq/ returns signed CHEQ containing nonce and exp
         """
         from core.crypto import get_rs_key_manager
-        url = reverse("resource_server:resource_cheq", kwargs={"process_token": self.process_token})
+        url = reverse("resource_server:resource_cheq", kwargs={"process_id": self.process.id})
         token = self.generate_valid_cs_token()
         response = self.client.get(url, HTTP_AUTHORIZATION=f"Bearer {token}")
         self.assertEqual(response.status_code, 200)
@@ -116,31 +115,53 @@ class SecurityAuthenticationTests(TestCase):
         self.assertTrue(len(cheq["nonce"]) > 10)
         self.assertTrue(cheq["exp"] > time.time())
 
-    def test_select_flight_on_accepted_process_returns_409(self):
+    @patch('resource_server.services.SignatureService.verify_auth0_token')
+    def test_select_flight_on_accepted_process_returns_409(self, mock_verify):
         """
         POST to select_flight on an already finalized/accepted process returns 409 Conflict
         """
         from .models import Result
+        mock_verify.return_value = {
+            "sub": "ai_agent_client@clients",
+            "azp": "ai_agent_client",
+            "gty": "client-credentials"
+        }
         Result.objects.create(process_id=self.process.id, confirmation_status="ACCEPT")
-        url = reverse("resource_server:select_flight", kwargs={"process_token": self.process_token})
-        response = self.client.post(url, data={"selected_flight": "Lufthansa LU561 - $280"}, content_type="application/json")
+        url = reverse("resource_server:select_flight", kwargs={"process_id": self.process.id})
+        response = self.client.post(
+            url,
+            data={"selected_flight": "Lufthansa LU561 - $280"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer mock_ai_agent_token"
+        )
         self.assertEqual(response.status_code, 409)
 
-    def test_select_flight_creates_new_process_when_previously_rejected(self):
+    @patch('resource_server.services.SignatureService.verify_auth0_token')
+    def test_select_flight_creates_new_process_when_previously_rejected(self, mock_verify):
         """
         POST to select_flight when previous choice was rejected spawns an isolated new Process
         leaving the original process permanently marked as REJECT.
         """
         from .models import Result
+        mock_verify.return_value = {
+            "sub": "ai_agent_client@clients",
+            "azp": "ai_agent_client",
+            "gty": "client-credentials"
+        }
         Result.objects.create(process_id=self.process.id, confirmation_status="REJECT")
-        url = reverse("resource_server:select_flight", kwargs={"process_token": self.process_token})
-        response = self.client.post(url, data={"selected_flight": "Lufthansa LU561 - $280"}, content_type="application/json")
+        url = reverse("resource_server:select_flight", kwargs={"process_id": self.process.id})
+        response = self.client.post(
+            url,
+            data={"selected_flight": "Lufthansa LU561 - $280"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer mock_ai_agent_token"
+        )
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("resource_uri", data)
         self.assertIn("result_uri", data)
         new_process_id = data["process_id"]
-        self.assertNotEqual(new_process_id, self.process.id)
+        self.assertNotEqual(str(new_process_id), str(self.process.id))
 
         # Original process remains untouched and permanently REJECT
         orig_result = Result.objects.get(process_id=self.process.id)
@@ -167,11 +188,11 @@ class SecurityAuthenticationTests(TestCase):
 
     def test_cheq_nested_jwe_token_flow(self):
         """
-        GET /resource_server/resource/<token>/cheq/ with Accept: application/jose+json
+        GET /resource_server/resource/<uuid>/cheq/ with Accept: application/jose+json
         returns 5-part Nested JWS-in-JWE token
         """
         from core.crypto import get_cs_key_manager, get_rs_key_manager, get_jwks_cache, NestedTokenService
-        url = reverse("resource_server:resource_cheq", kwargs={"process_token": self.process_token})
+        url = reverse("resource_server:resource_cheq", kwargs={"process_id": self.process.id})
         token = self.generate_valid_cs_token()
         response = self.client.get(url, HTTP_AUTHORIZATION=f"Bearer {token}", HTTP_ACCEPT="application/jose+json")
         self.assertEqual(response.status_code, 200)
@@ -215,7 +236,7 @@ class SecurityAuthenticationTests(TestCase):
         nonce = str(uuid.uuid4())
         cheq_payload = {
             "version": 1.0,
-            "operation name": self.process.id,
+            "operation name": str(self.process.id),
             "nonce": nonce,
             "exp": int(time.time()) + 300
         }
@@ -228,7 +249,7 @@ class SecurityAuthenticationTests(TestCase):
             audience="resource_server"
         )
 
-        url = reverse("resource_server:resource", kwargs={"process_token": self.process_token})
+        url = reverse("resource_server:resource", kwargs={"process_id": self.process.id})
         response = self.client.post(
             url,
             data={"signed_CHEQ": nested_token},
@@ -253,7 +274,7 @@ class SecurityAuthenticationTests(TestCase):
         nonce = str(uuid.uuid4())
         cheq_payload = {
             "version": 1.0,
-            "operation name": self.process.id,
+            "operation name": str(self.process.id),
             "nonce": nonce,
             "exp": int(time.time()) + 300
         }
@@ -266,7 +287,7 @@ class SecurityAuthenticationTests(TestCase):
             audience="resource_server"
         )
 
-        url = reverse("resource_server:resource", kwargs={"process_token": self.process_token})
+        url = reverse("resource_server:resource", kwargs={"process_id": self.process.id})
         response = self.client.post(
             url,
             data={"signed_CHEQ": nested_token},
@@ -291,7 +312,7 @@ class SecurityAuthenticationTests(TestCase):
         nonce = str(uuid.uuid4())
         cheq_payload = {
             "version": 1.0,
-            "operation name": self.process.id,
+            "operation name": str(self.process.id),
             "nonce": nonce,
             "exp": int(time.time()) + 300
         }
@@ -305,7 +326,7 @@ class SecurityAuthenticationTests(TestCase):
             audience="resource_server"
         )
 
-        url = reverse("resource_server:resource", kwargs={"process_token": self.process_token})
+        url = reverse("resource_server:resource", kwargs={"process_id": self.process.id})
         response = self.client.post(
             url,
             data={"signed_CHEQ": nested_token},
@@ -328,7 +349,7 @@ class SecurityAuthenticationTests(TestCase):
         nonce = str(uuid.uuid4())
         cheq_payload = {
             "version": 1.0,
-            "operation name": self.process.id,
+            "operation name": str(self.process.id),
             "nonce": nonce,
             "exp": int(time.time()) + 300
         }
@@ -341,13 +362,103 @@ class SecurityAuthenticationTests(TestCase):
             audience="resource_server"
         )
 
-        url = reverse("resource_server:resource", kwargs={"process_token": self.process_token})
+        url = reverse("resource_server:resource", kwargs={"process_id": self.process.id})
         response = self.client.post(
             url,
             data={"signed_CHEQ": nested_token},
             HTTP_AUTHORIZATION="Bearer mock_token"
         )
         self.assertEqual(response.status_code, 422)
+
+
+class AIAgentAuthenticationTests(TestCase):
+    def setUp(self):
+        from .models import Result
+        self.client = Client()
+        self.process = Process.objects.create()
+        Resource.objects.create(
+            process_id=self.process.id,
+            pub_date=timezone.now(),
+        )
+        Result.objects.create(process_id=self.process.id, confirmation_status="PENDING")
+
+    def test_ai_agent_endpoints_reject_unauthenticated_requests(self):
+        """
+        All 3 AI Agent endpoints on Resource Server must reject unauthenticated calls with 401/403.
+        """
+        exec_url = reverse("resource_server:execute_process_with_confirmation")
+        select_url = reverse("resource_server:select_flight", kwargs={"process_id": self.process.id})
+        result_url = reverse("resource_server:result", kwargs={"process_id": self.process.id})
+
+        resp1 = self.client.post(exec_url, data={}, content_type="application/json")
+        resp2 = self.client.post(select_url, data={"selected_flight": "UA100"}, content_type="application/json")
+        resp3 = self.client.get(result_url)
+
+        self.assertIn(resp1.status_code, [401, 403])
+        self.assertIn(resp2.status_code, [401, 403])
+        self.assertIn(resp3.status_code, [401, 403])
+
+    @patch("resource_server.views.requests.post")
+    @patch("resource_server.services.SignatureService.verify_auth0_token")
+    def test_ai_agent_authenticated_endpoints_succeed(self, mock_verify, mock_airline_post):
+        """
+        Valid AI Agent M2M JWT (gty=client-credentials, @clients sub) is accepted
+        across execute_process_with_confirmation (202), select_flight (200), and result (200)
+        without the Resource Server needing to know AI_AGENT_CLIENT_ID in settings.
+        """
+        mock_verify.return_value = {
+            "iss": "https://dev-q172gr40txifrff3.us.auth0.com/",
+            "sub": "ai_agent_m2m_client_123@clients",
+            "aud": "https://cheq-sync-api",
+            "azp": "ai_agent_m2m_client_123",
+            "gty": "client-credentials"
+        }
+        mock_airline_post.return_value.json.return_value = {"best_flights": []}
+
+        # 1. Trigger confirmation (202 Accepted)
+        exec_url = reverse("resource_server:execute_process_with_confirmation")
+        resp_exec = self.client.post(
+            exec_url,
+            data={"origin": "YVR", "destination": "NRT"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer valid_ai_agent_jwt"
+        )
+        self.assertEqual(resp_exec.status_code, 202)
+        self.assertIn("resource_uri", resp_exec.json())
+
+        # 2. Select flight (200 OK)
+        select_url = reverse("resource_server:select_flight", kwargs={"process_id": self.process.id})
+        resp_select = self.client.post(
+            select_url,
+            data={"selected_flight": "ANA NH135 - $1,742"},
+            content_type="application/json",
+            HTTP_AUTHORIZATION="Bearer valid_ai_agent_jwt"
+        )
+        self.assertEqual(resp_select.status_code, 200)
+
+        # 3. Poll result (200 OK)
+        result_url = reverse("resource_server:result", kwargs={"process_id": self.process.id})
+        resp_result = self.client.get(
+            result_url,
+            HTTP_AUTHORIZATION="Bearer valid_ai_agent_jwt"
+        )
+        self.assertEqual(resp_result.status_code, 200)
+
+    @patch("resource_server.services.SignatureService.verify_auth0_token")
+    def test_human_user_token_rejected_on_ai_agent_endpoint(self, mock_verify):
+        """
+        A human user token (missing gty=client-credentials and @clients subject) is rejected with 401/403.
+        """
+        mock_verify.return_value = {
+            "iss": "https://dev-q172gr40txifrff3.us.auth0.com/",
+            "sub": "auth0|64a9f1234567890",
+            "aud": "https://cheq-sync-api"
+        }
+        result_url = reverse("resource_server:result", kwargs={"process_id": self.process.id})
+        resp = self.client.get(result_url, HTTP_AUTHORIZATION="Bearer human_user_jwt")
+        self.assertIn(resp.status_code, [401, 403])
+
+
 
 
 

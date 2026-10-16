@@ -1,3 +1,4 @@
+import uuid
 from django.db import models
 
 
@@ -7,7 +8,7 @@ class ConfirmationStatus(models.TextChoices):
     REJECTED = "rejected"
 # todo have one consolidated table
 class Resource(models.Model):
-    process_id = models.IntegerField() #this is meant to denote a set of steps within a business process
+    process_id = models.UUIDField(default=uuid.uuid4) #this is meant to denote a set of steps within a business process
     pub_date = models.DateTimeField("date published")
     selected_flight = models.JSONField(null=True, blank=True)
 
@@ -20,7 +21,7 @@ class Resource(models.Model):
         return cls.objects.filter(process_id=process_id)
 
 class ResourceToConfirmationMapping(models.Model):
-    process_id = models.IntegerField() #this is the field that will join a process to a confirmation URI
+    process_id = models.UUIDField(default=uuid.uuid4) #this is the field that will join a process to a confirmation URI
     confirmation_uri = models.URLField() #this is the confirmation URI
 
     def __str__(self):
@@ -30,7 +31,7 @@ class ResourceToConfirmationMapping(models.Model):
         return self.process_id == process_id
 
 class Result(models.Model):
-    process_id = models.IntegerField() #this is meant to denote a set of steps within a business process
+    process_id = models.UUIDField(default=uuid.uuid4) #this is meant to denote a set of steps within a business process
     confirmation_status = models.CharField(
         max_length=8,
         choices=ConfirmationStatus.choices,
@@ -45,6 +46,7 @@ class Result(models.Model):
 
 
 class Process(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -55,7 +57,7 @@ class Process(models.Model):
         return f"Process {self.id}"
 
 class Flight(models.Model):
-    process_id = models.IntegerField(null=True, blank=True)
+    process_id = models.UUIDField(null=True, blank=True)
     origin = models.CharField(max_length=3)
     destination = models.CharField(max_length=3)
     outbound_date = models.DateField()
@@ -80,7 +82,7 @@ class Flight(models.Model):
 
 class ConsumedNonce(models.Model):
     nonce = models.CharField(max_length=64, primary_key=True)
-    process_id = models.IntegerField()
+    process_id = models.UUIDField()
     consumed_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

@@ -168,7 +168,11 @@ CSRF_TRUSTED_ORIGINS = [
 CORS_ALLOW_CREDENTIALS = True
 
 # Auth0 Configuration
-AUTH0_DOMAIN = os.getenv('AUTH0_DOMAIN')
-AUTH0_CLIENT_ID = os.getenv('AUTH0_CLIENT_ID')
-AUTH0_CLIENT_SECRET = os.getenv('AUTH0_CLIENT_SECRET')
-AUTH0_AUDIENCE = os.getenv('AUTH0_AUDIENCE')
+AUTH0_DOMAIN = os.getenv('AUTH0_DOMAIN', '').strip()
+AUTH0_CLIENT_ID = os.getenv('AUTH0_CLIENT_ID', '').strip()
+AUTH0_CLIENT_SECRET = os.getenv('AUTH0_CLIENT_SECRET', '').strip()
+AUTH0_AUDIENCE = os.getenv('AUTH0_AUDIENCE', '').strip()
+
+# AI Agent Auth0 M2M Configuration
+AI_AGENT_CLIENT_ID = os.getenv('AI_AGENT_CLIENT_ID', '').strip()
+AI_AGENT_CLIENT_SECRET = os.getenv('AI_AGENT_CLIENT_SECRET', '').strip()

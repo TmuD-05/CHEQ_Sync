@@ -3,7 +3,7 @@
     "model": "resource_server.resource",
     "pk": 1,
     "fields": {
-      "process_id": "1",
+      "process_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
       "pub_date": "2025-09-03T09:04:17.302Z"
     }
   },
@@ -11,7 +11,7 @@
     "model": "resource_server.resource",
     "pk": 2,
     "fields": {
-      "process_id": "1",
+      "process_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
       "pub_date": "2025-09-03T09:10:17.302Z"
     }
   },
@@ -19,7 +19,7 @@
     "model": "resource_server.resource",
     "pk": 3,
     "fields": {
-      "process_id": "1",
+      "process_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
       "pub_date": "2025-09-03T09:14:17.302Z"
     }
   },
@@ -27,7 +27,7 @@
     "model": "resource_server.resource",
     "pk": 4,
     "fields": {
-      "process_id": "2",
+      "process_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
       "pub_date": "2025-09-03T09:04:17.302Z"
     }
   },
@@ -35,7 +35,7 @@
     "model": "resource_server.resource",
     "pk": 5,
     "fields": {
-      "process_id": "2",
+      "process_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
       "pub_date": "2025-09-03T09:10:17.302Z"
     }
   },
@@ -43,7 +43,7 @@
     "model": "resource_server.resource",
     "pk": 6,
     "fields": {
-      "process_id": "2",
+      "process_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
       "pub_date": "2025-09-03T09:14:17.302Z"
     }
   },
@@ -51,7 +51,7 @@
     "model": "resource_server.resourcetoconfirmationmapping",
     "pk": 1,
     "fields": {
-      "process_id": "1",
+      "process_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
       "confirmation_uri": "http://127.0.0.1:8000/confirmation_server/trigger_confirmation"
     }
   },
@@ -59,7 +59,7 @@
     "model": "resource_server.resourcetoconfirmationmapping",
     "pk": 2,
     "fields": {
-      "process_id": "2",
+      "process_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
       "confirmation_uri": "http://127.0.0.1:8000/confirmation_server/trigger_confirmation"
     }
   },
@@ -67,7 +67,7 @@
     "model": "resource_server.result",
     "pk": 1,
     "fields": {
-      "process_id": "1",
+      "process_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
       "confirmation_status": "pending"
     }
   },
@@ -75,7 +75,7 @@
     "model": "resource_server.result",
     "pk": 2,
     "fields": {
-      "process_id": "2",
+      "process_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
       "confirmation_status": "pending"
     }
   }

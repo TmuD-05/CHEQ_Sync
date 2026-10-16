@@ -60,8 +60,8 @@ class AIAgentM2MTokenTests(TestCase):
         mock_resp.status_code = 202
         mock_resp.json.return_value = {
             "confirmation_uri": "http://127.0.0.1:8000/confirmation_server/trigger_confirmation/",
-            "resource_uri": "http://127.0.0.1:8000/resource_server/resource/tok123/",
-            "result_uri": "http://127.0.0.1:8000/resource_server/result/1/",
+            "resource_uri": "http://127.0.0.1:8000/resource_server/resource/f47ac10b-58cc-4372-a567-0e02b2c3d479/",
+            "result_uri": "http://127.0.0.1:8000/resource_server/result/f47ac10b-58cc-4372-a567-0e02b2c3d479/",
             "flights": {"best_flights": []},
         }
         mock_post.return_value = mock_resp
@@ -86,8 +86,8 @@ class AIAgentM2MTokenTests(TestCase):
         agent = AgentService()
         agent.uri_pack = {
             "confirmation_uri": "http://127.0.0.1:8000/confirmation_server/trigger_confirmation/",
-            "resource_uri": "http://127.0.0.1:8000/resource_server/resource/tok123/",
-            "result_uri": "http://127.0.0.1:8000/resource_server/result/1/",
+            "resource_uri": "http://127.0.0.1:8000/resource_server/resource/f47ac10b-58cc-4372-a567-0e02b2c3d479/",
+            "result_uri": "http://127.0.0.1:8000/resource_server/result/f47ac10b-58cc-4372-a567-0e02b2c3d479/",
         }
         agent._save_uri_pack("test_poll_session")
 
